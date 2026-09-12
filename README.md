@@ -29,7 +29,8 @@ bash scripts/install-pi.sh          # installs python3/ffmpeg, venv, systemd ser
 
 Then open `http://<pi-ip>:8080` in any browser on your network:
 
-1. **Settings** tab → paste your provider's **M3U playlist URL** and **XMLTV EPG URL** → *Save & import*.
+1. **Settings** tab → either fill in the **Xtream Codes login** (server URL, username, password) or paste
+   your provider's **M3U playlist URL** and **XMLTV EPG URL** → *Save & import*.
 2. **Channels** tab lists everything with now/next from the guide. *Play* opens the HLS stream, *Rec* records the current show.
 3. **Guide** tab → pick a channel → *Record* any upcoming program.
 4. **Scheduled** / **Recordings** tabs manage the DVR.

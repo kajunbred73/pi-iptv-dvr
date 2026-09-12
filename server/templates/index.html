@@ -43,8 +43,16 @@
 </section>
 
 <section id="tab-settings" class="tab">
+  <form method="post" action="/setup-xtream" class="card">
+    <h2>Xtream Codes login</h2>
+    <p class="muted">If your provider gave you a server URL, username and password, enter them here. The M3U/EPG links below are filled in automatically.</p>
+    <label>Server URL <input name="xtream_host" value="{{ cfg.xtream_host }}" placeholder="http://provider.example.com:8080"></label>
+    <label>Username <input name="xtream_user" value="{{ cfg.xtream_user }}"></label>
+    <label>Password <input name="xtream_pass" type="password" value="{{ cfg.xtream_pass }}"></label>
+    <button>Save &amp; import</button>
+  </form>
   <form method="post" action="/setup" class="card">
-    <h2>Sources</h2>
+    <h2>Sources (M3U / XMLTV)</h2>
     <label>M3U playlist URL <input name="m3u_url" value="{{ cfg.m3u_url }}" placeholder="http://provider/get.php?...&type=m3u_plus"></label>
     <label>XMLTV EPG URL <input name="epg_url" value="{{ cfg.epg_url }}" placeholder="http://provider/xmltv.php?... (or .xml.gz)"></label>
     <button>Save &amp; import</button>

@@ -9,6 +9,9 @@ CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 DEFAULTS = {
     "m3u_url": "",
     "epg_url": "",
+    "xtream_host": "",
+    "xtream_user": "",
+    "xtream_pass": "",
     "recordings_dir": os.path.join(DATA_DIR, "recordings"),
     "live_dir": os.path.join(DATA_DIR, "live"),
     "refresh_hours": 6,

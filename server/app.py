@@ -4,6 +4,8 @@ import os
 import threading
 import time
 
+from urllib.parse import quote
+
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 import config
@@ -250,6 +252,23 @@ def index():
 def setup():
     config.save({"m3u_url": request.form.get("m3u_url", "").strip(),
                  "epg_url": request.form.get("epg_url", "").strip()})
+    playlist.refresh_all()
+    return redirect(url_for("index"))
+
+
+@app.post("/setup-xtream")
+def setup_xtream():
+    host = request.form.get("xtream_host", "").strip().rstrip("/")
+    user = request.form.get("xtream_user", "").strip()
+    pw = request.form.get("xtream_pass", "").strip()
+    if host and not host.startswith("http"):
+        host = "http://" + host
+    updates = {"xtream_host": host, "xtream_user": user, "xtream_pass": pw}
+    if host and user and pw:
+        creds = f"username={quote(user)}&password={quote(pw)}"
+        updates["m3u_url"] = f"{host}/get.php?{creds}&type=m3u_plus&output=ts"
+        updates["epg_url"] = f"{host}/xmltv.php?{creds}"
+    config.save(updates)
     playlist.refresh_all()
     return redirect(url_for("index"))
 
