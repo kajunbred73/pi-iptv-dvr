@@ -1,0 +1,14 @@
+title=Pi IPTV DVR
+major_version=1
+minor_version=0
+build_version=1
+
+mm_icon_focus_hd=pkg:/images/icon_hd.png
+mm_icon_focus_sd=pkg:/images/icon_sd.png
+splash_screen_hd=pkg:/images/splash_hd.png
+splash_screen_sd=pkg:/images/splash_sd.png
+splash_color=#111111
+splash_min_time=800
+
+ui_resolutions=fhd
+supports_input_launch=1

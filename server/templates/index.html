@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pi IPTV DVR</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+  <h1>Pi IPTV DVR</h1>
+  <nav>
+    <a href="#" data-tab="channels" class="active">Channels</a>
+    <a href="#" data-tab="guide">Guide</a>
+    <a href="#" data-tab="schedules">Scheduled</a>
+    <a href="#" data-tab="recordings">Recordings</a>
+    <a href="#" data-tab="settings">Settings</a>
+  </nav>
+  <span id="status"></span>
+</header>
+
+<main>
+<section id="tab-channels" class="tab active">
+  <div class="toolbar">
+    <input id="chan-filter" placeholder="Filter channels…">
+    <select id="chan-group"><option value="">All groups</option></select>
+  </div>
+  <table id="chan-table"><thead><tr><th>#</th><th></th><th>Channel</th><th>Now</th><th>Next</th><th></th></tr></thead><tbody></tbody></table>
+</section>
+
+<section id="tab-guide" class="tab">
+  <div class="toolbar"><label>Channel <select id="guide-chan"></select></label></div>
+  <table id="guide-table"><thead><tr><th>Start</th><th>End</th><th>Program</th><th></th></tr></thead><tbody></tbody></table>
+</section>
+
+<section id="tab-schedules" class="tab">
+  <table id="sched-table"><thead><tr><th>Channel</th><th>Title</th><th>Start</th><th>End</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
+</section>
+
+<section id="tab-recordings" class="tab">
+  <video id="player" controls style="display:none"></video>
+  <table id="rec-table"><thead><tr><th>Title</th><th>Channel</th><th>Recorded</th><th>Size</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
+</section>
+
+<section id="tab-settings" class="tab">
+  <form method="post" action="/setup" class="card">
+    <h2>Sources</h2>
+    <label>M3U playlist URL <input name="m3u_url" value="{{ cfg.m3u_url }}" placeholder="http://provider/get.php?...&type=m3u_plus"></label>
+    <label>XMLTV EPG URL <input name="epg_url" value="{{ cfg.epg_url }}" placeholder="http://provider/xmltv.php?... (or .xml.gz)"></label>
+    <button>Save &amp; import</button>
+    <button type="button" id="refresh-btn">Refresh now</button>
+  </form>
+  <div class="card">
+    <h2>Roku setup</h2>
+    <p>In the Roku channel, enter this server address: <code id="server-addr"></code></p>
+    <p>Other players (VLC, Kodi) can use <a href="/playlist.m3u">/playlist.m3u</a>.</p>
+    <p>Recordings folder: <code>{{ cfg.recordings_dir }}</code></p>
+  </div>
+</section>
+</main>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
