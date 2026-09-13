@@ -1,8 +1,8 @@
 sub init()
-    m.top.functionName = "run"
+    m.top.functionName = "doRequest"
 end sub
 
-sub run()
+sub doRequest()
     xfer = CreateObject("roUrlTransfer")
     port = CreateObject("roMessagePort")
     xfer.setMessagePort(port)

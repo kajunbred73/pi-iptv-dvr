@@ -133,25 +133,25 @@ sub onMenuSelected()
 end sub
 
 sub showTab(idx as Integer)
-    tab = m.tabs[idx]
+    tabName = m.tabs[idx]
     m.heading.text = tab
-    if tab = "Live TV"
+    if tabName = "Live TV"
         m.mode = "live"
         m.hint.text = "OK: watch   *: record"
         api("/channels", "channels")
-    else if tab = "Guide"
+    else if tabName = "Guide"
         m.mode = "guide"
         m.hint.text = "OK: open channel guide"
         api("/channels", "guidechannels")
-    else if tab = "Recordings"
+    else if tabName = "Recordings"
         m.mode = "recordings"
         m.hint.text = "OK: play   *: delete"
         api("/recordings", "recordings")
-    else if tab = "Scheduled"
+    else if tabName = "Scheduled"
         m.mode = "scheduled"
         m.hint.text = "OK: cancel recording"
         api("/schedules", "schedules")
-    else if tab = "Settings"
+    else if tabName = "Settings"
         m.mode = "settings"
         m.hint.text = ""
         showSettings()
@@ -169,16 +169,16 @@ sub onContentFocused()
     if m.mode = "live" or m.mode = "guide"
         info = txt(it.grp)
         if it.now <> invalid
-            info = info + "   |   Now: " + txt(it.now.title) + " (" + fmtTime(it.now.start) + " - " + fmtTime(it.now.stop) + ")"
+            info = info + "   |   Now: " + txt(it.now.title) + " (" + fmtTime(it.now.start) + " - " + fmtTime(it.now["stop"]) + ")"
         end if
-        if it.next <> invalid then info = info + "   |   Next: " + txt(it.next.title)
+        if it["next"] <> invalid then info = info + "   |   Next: " + txt(it["next"].title)
         m.detail.text = info
     else if m.mode = "programs"
         m.detail.text = txt(it.description)
     else if m.mode = "recordings"
         m.detail.text = txt(it.description)
     else if m.mode = "scheduled"
-        m.detail.text = fmtDay(it.start) + " " + fmtTime(it.start) + " - " + fmtTime(it.stop)
+        m.detail.text = fmtDay(it.start) + " " + fmtTime(it.start) + " - " + fmtTime(it["stop"])
     else
         m.detail.text = ""
     end if
@@ -403,7 +403,7 @@ sub onApiResponse(ev as Object)
         for each p in r.programs
             mark = ""
             if p.scheduled = true then mark = "  [REC]"
-            labels.push(fmtDay(p.start) + "  " + fmtTime(p.start) + " - " + fmtTime(p.stop) + "   " + txt(p.title) + mark)
+            labels.push(fmtDay(p.start) + "  " + fmtTime(p.start) + " - " + fmtTime(p["stop"]) + "   " + txt(p.title) + mark)
         end for
         setRows(labels, r.programs, "No guide data for this channel.")
     else if tag = "recordings"
