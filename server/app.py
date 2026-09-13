@@ -46,6 +46,16 @@ def _now_next(tvg_id, now):
     return cur, nxt
 
 
+def _now_next_all(now):
+    """{tvg_id: (current, next)} for every channel in two queries."""
+    cur = {p["tvg_id"]: p for p in db.rows(
+        "SELECT * FROM programs WHERE start<=? AND stop>?", (now, now))}
+    nxt = {p["tvg_id"]: p for p in db.rows(
+        "SELECT p.* FROM programs p JOIN (SELECT tvg_id, MIN(start) s FROM programs WHERE start>? GROUP BY tvg_id) m "
+        "ON m.tvg_id=p.tvg_id AND m.s=p.start", (now,))}
+    return cur, nxt
+
+
 def _refresh_loop():
     while True:
         last = int(db.get_meta("m3u_last", 0) or 0)
@@ -71,6 +81,7 @@ def api_status():
         "m3u_last": int(db.get_meta("m3u_last", 0) or 0),
         "epg_last": int(db.get_meta("epg_last", 0) or 0),
         "live_sessions": streamer.live.status(),
+        "import": playlist.state,
     })
 
 
@@ -79,13 +90,14 @@ def api_channels():
     now = _now()
     grp = request.args.get("group")
     q = "SELECT * FROM channels" + (" WHERE grp=?" if grp else "") + " ORDER BY favorite DESC, num, name"
+    with_epg = request.args.get("epg", "1") != "0"
+    cur, nxt = _now_next_all(now) if with_epg else ({}, {})
     out = []
     for ch in db.rows(q, (grp,) if grp else ()):
         cj = _channel_json(ch)
-        if request.args.get("epg", "1") != "0":
-            cur, nxt = _now_next(ch["tvg_id"], now)
-            cj["now"] = cur
-            cj["next"] = nxt
+        if with_epg:
+            cj["now"] = cur.get(ch["tvg_id"])
+            cj["next"] = nxt.get(ch["tvg_id"])
         out.append(cj)
     return jsonify(out)
 
@@ -204,7 +216,13 @@ def api_config_set():
 
 @app.post("/api/refresh")
 def api_refresh():
-    return jsonify(playlist.refresh_all())
+    started = playlist.refresh_async()
+    return jsonify({"started": started, "import": playlist.state})
+
+
+@app.get("/api/import-status")
+def api_import_status():
+    return jsonify(playlist.state)
 
 
 # ---------------------------------------------------------------- media
@@ -252,8 +270,8 @@ def index():
 def setup():
     config.save({"m3u_url": request.form.get("m3u_url", "").strip(),
                  "epg_url": request.form.get("epg_url", "").strip()})
-    playlist.refresh_all()
-    return redirect(url_for("index"))
+    playlist.refresh_async()
+    return redirect(url_for("index", tab="settings"))
 
 
 @app.post("/setup-xtream")
@@ -269,8 +287,8 @@ def setup_xtream():
         updates["m3u_url"] = f"{host}/get.php?{creds}&type=m3u_plus&output=ts"
         updates["epg_url"] = f"{host}/xmltv.php?{creds}"
     config.save(updates)
-    playlist.refresh_all()
-    return redirect(url_for("index"))
+    playlist.refresh_async()
+    return redirect(url_for("index", tab="settings"))
 
 
 @app.template_filter("ts")

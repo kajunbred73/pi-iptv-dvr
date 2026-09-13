@@ -435,7 +435,7 @@ sub onApiResponse(ev as Object)
         toast("Deleted")
         api("/recordings", "recordings")
     else if tag = "refresh"
-        toast("Refreshed: " + txt(r.channels) + " channels, " + txt(r.programs) + " programs")
+        if r.started = true then toast("Import started on server; it may take a few minutes") else toast("Import already running")
         loadStatus()
     end if
 end sub

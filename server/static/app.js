@@ -96,13 +96,27 @@ window.delRec = async id => { if (confirm("Delete recording?")) { await api(`/re
 
 // ---- settings / status
 $("#server-addr").textContent = location.host;
-$("#refresh-btn").onclick = async () => { $("#refresh-btn").disabled = true; await api("/refresh", { method: "POST" }); location.reload(); };
+$("#refresh-btn").onclick = async () => { await api("/refresh", { method: "POST" }); loadStatus(); };
+let wasImporting = false;
 async function loadStatus() {
   const s = await api("/status");
-  $("#status").textContent = `${s.channels} channels · ${s.programs} programs · EPG ${s.epg_last ? fmt(s.epg_last) : "never"}` +
-    (s.live_sessions.length ? ` · streaming: ${s.live_sessions.map(l => l.name).join(", ")}` : "");
+  const imp = s.import || {};
+  let text;
+  if (imp.running) {
+    text = `Importing ${imp.step}… (${Math.round((Date.now() / 1000) - imp.started)}s) — large guides can take several minutes on a Pi`;
+    wasImporting = true;
+    setTimeout(loadStatus, 3000);
+  } else {
+    text = `${s.channels} channels · ${s.programs} programs · EPG ${s.epg_last ? fmt(s.epg_last) : "never"}` +
+      (s.live_sessions.length ? ` · streaming: ${s.live_sessions.map(l => l.name).join(", ")}` : "");
+    const err = imp.result && (imp.result.channels_error || imp.result.programs_error);
+    if (err) text = `Import error: ${err} · ` + text;
+    if (wasImporting) { wasImporting = false; loadChannels(); }
+  }
+  $("#status").textContent = text;
 }
-
 const loaders = { channels: loadChannels, guide: loadGuide, schedules: loadSchedules, recordings: loadRecordings };
 loadStatus(); loadChannels();
 setInterval(loadStatus, 15000);
+const startTab = new URLSearchParams(location.search).get("tab");
+if (startTab) document.querySelector(`nav a[data-tab="${startTab}"]`)?.click();
