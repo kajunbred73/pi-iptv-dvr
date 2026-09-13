@@ -6,16 +6,17 @@
     <Label id="title" text="Pi IPTV DVR" translation="[60,40]" font="font:LargeBoldSystemFont" color="#FFFFFF" />
     <Label id="status" translation="[1100,52]" width="760" horizAlign="right" font="font:SmallestSystemFont" color="#8899AA" />
 
-    <LabelList id="menu" translation="[60,130]" itemSize="[340,64]" numRows="6" color="#AAB4BE" focusedColor="#FFFFFF" />
+    <LabelList id="menu" translation="[60,130]" itemSize="[340,60]" numRows="8" color="#AAB4BE" focusedColor="#FFFFFF" />
     <Rectangle id="divider" translation="[430,130]" width="2" height="820" color="#2A3038" />
 
-    <Label id="heading" translation="[470,120]" font="font:MediumBoldSystemFont" color="#FFFFFF" />
+    <Label id="heading" translation="[470,120]" width="1390" font="font:MediumBoldSystemFont" color="#FFFFFF" />
     <LabelList id="content" translation="[470,180]" itemSize="[1390,58]" numRows="13" color="#D0D8E0" focusedColor="#FFFFFF" />
+    <GuideGrid id="grid" translation="[470,170]" visible="false" />
     <Label id="empty" translation="[470,200]" width="1390" wrap="true" font="font:MediumSystemFont" color="#66707A" visible="false" />
 
     <Rectangle id="detailBg" translation="[470,950]" width="1390" height="90" color="#161C22" />
     <Label id="detail" translation="[490,960]" width="1350" height="70" wrap="true" maxLines="2" font="font:SmallestSystemFont" color="#AAB4BE" />
-    <Label id="hint" translation="[60,1000]" width="340" font="font:SmallestSystemFont" color="#66707A" />
+    <Label id="hint" translation="[60,960]" width="340" height="80" wrap="true" font="font:SmallestSystemFont" color="#66707A" />
 
     <Video id="video" width="1920" height="1080" visible="false" enableUI="true" />
     <Timer id="statusTimer" repeat="true" duration="30" />

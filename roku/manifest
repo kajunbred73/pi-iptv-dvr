@@ -1,6 +1,6 @@
 title=Pi IPTV DVR
 major_version=1
-minor_version=0
+minor_version=1
 build_version=1
 
 mm_icon_focus_hd=pkg:/images/icon_hd.png

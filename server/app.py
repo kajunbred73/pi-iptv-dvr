@@ -34,6 +34,20 @@ def _base_url():
 _ENABLED = "WHERE grp IN (SELECT name FROM groups WHERE enabled=1)"
 
 
+def _channel_filter():
+    """WHERE clause from ?group= / ?favorites=1 / ?q= (all within enabled groups)."""
+    clauses, args = [_ENABLED[6:]], []
+    if request.args.get("group"):
+        clauses.append("grp=?")
+        args.append(request.args["group"])
+    if request.args.get("favorites") == "1":
+        clauses.append("favorite=1")
+    if request.args.get("q"):
+        clauses.append("name LIKE ?")
+        args.append("%" + request.args["q"] + "%")
+    return "WHERE " + " AND ".join(clauses), args
+
+
 def _channel_json(ch):
     ch = dict(ch)
     ch["stream_url"] = f"{_base_url()}/live/{ch['id']}/index.m3u8"
@@ -93,13 +107,12 @@ def api_status():
 @app.get("/api/channels")
 def api_channels():
     now = _now()
-    grp = request.args.get("group")
-    where = "WHERE grp=?" if grp else _ENABLED
+    where, args = _channel_filter()
     q = f"SELECT * FROM channels {where} ORDER BY favorite DESC, num, name"
     with_epg = request.args.get("epg", "1") != "0"
     cur, nxt = _now_next_all(now) if with_epg else ({}, {})
     out = []
-    for ch in db.rows(q, (grp,) if grp else ()):
+    for ch in db.rows(q, args):
         cj = _channel_json(ch)
         if with_epg:
             cj["now"] = cur.get(ch["tvg_id"])
@@ -148,19 +161,30 @@ def api_epg(cid):
 
 @app.get("/api/guide")
 def api_guide():
-    """Compact grid: every channel with programs for the next N hours."""
-    hours = int(request.args.get("hours", 4))
+    """Grid: filtered channels with programs in [from, from+hours). Accepts the
+    same ?group=/?favorites=1/?q= filters as /api/channels."""
+    hours = int(request.args.get("hours", 3))
     now = _now()
-    end = now + hours * 3600
+    start = int(request.args.get("from", now - now % 1800))
+    end = start + hours * 3600
+    where, args = _channel_filter()
+    chans = db.rows(f"SELECT * FROM channels {where} ORDER BY favorite DESC, num, name", args)
+    ids = {c["tvg_id"] for c in chans if c["tvg_id"]}
     progs = {}
-    for p in db.rows("SELECT tvg_id,start,stop,title FROM programs WHERE stop>? AND start<? ORDER BY start", (now, end)):
-        progs.setdefault(p["tvg_id"], []).append(p)
+    if ids:
+        for p in db.rows("SELECT tvg_id,start,stop,title FROM programs WHERE stop>? AND start<? ORDER BY start", (start, end)):
+            if p["tvg_id"] in ids:
+                progs.setdefault(p["tvg_id"], []).append(p)
+    scheduled = {(s["channel_id"], s["start"]) for s in db.rows(
+        "SELECT channel_id, start FROM schedules WHERE status IN ('scheduled','recording')")}
     out = []
-    for ch in db.rows(f"SELECT * FROM channels {_ENABLED} ORDER BY favorite DESC, num, name"):
+    for ch in chans:
         cj = _channel_json(ch)
         cj["programs"] = progs.get(ch["tvg_id"], [])
+        for p in cj["programs"]:
+            p["scheduled"] = (ch["id"], p["start"]) in scheduled
         out.append(cj)
-    return jsonify({"start": now, "end": end, "channels": out})
+    return jsonify({"start": start, "end": end, "now": now, "channels": out})
 
 
 @app.get("/api/schedules")
@@ -196,6 +220,16 @@ def api_schedule_create():
     sid = db.execute("INSERT INTO schedules(channel_id,title,start,stop,status,created) VALUES(?,?,?,?,'scheduled',?)",
                      (cid, title, start, stop, now))
     return jsonify({"ok": True, "id": sid})
+
+
+@app.delete("/api/schedules/by-program")
+def api_schedule_delete_by_program():
+    """Cancel the schedule for ?channel_id=&start= (used by the guide grid)."""
+    row = db.row("SELECT id FROM schedules WHERE channel_id=? AND start=? AND status IN ('scheduled','recording')",
+                 (int(request.args["channel_id"]), int(request.args["start"])))
+    if row:
+        streamer.recorder.cancel(row["id"])
+    return jsonify({"ok": True, "found": bool(row)})
 
 
 @app.delete("/api/schedules/<int:sid>")

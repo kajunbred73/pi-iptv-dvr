@@ -30,8 +30,8 @@ async function loadChannels() {
   renderChannels();
 }
 function renderChannels() {
-  const f = $("#chan-filter").value.toLowerCase(), g = $("#chan-group").value;
-  const rows = channels.filter(c => (!g || c.grp === g) && (!f || c.name.toLowerCase().includes(f)));
+  const f = $("#chan-filter").value.toLowerCase(), g = $("#chan-group").value, favs = $("#chan-favs").checked;
+  const rows = channels.filter(c => (!g || c.grp === g) && (!favs || c.favorite) && (!f || c.name.toLowerCase().includes(f)));
   if (!channels.length) {
     $("#chan-table tbody").innerHTML = `<tr><td colspan="6" class="muted">No channels enabled yet. Go to <a href="#" onclick="document.querySelector('nav a[data-tab=settings]').click();return false">Settings → Channel groups</a> and tick the groups you watch.</td></tr>`;
     return;
@@ -52,6 +52,7 @@ function renderChannels() {
 }
 $("#chan-filter").oninput = renderChannels;
 $("#chan-group").onchange = renderChannels;
+$("#chan-favs").onchange = renderChannels;
 
 window.recordNow = async id => {
   const c = channels.find(x => x.id === id);

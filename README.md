@@ -94,14 +94,24 @@ The channel appears on the Roku home screen as **Pi IPTV DVR**. Sideloaded chann
 The channel asks for the Pi's address – enter e.g. `192.168.1.50:8080` (it's shown on the Pi's
 Settings page). Change it later under **Settings** in the channel.
 
+Side menu:
+
+* **Favorites** – TV-style grid guide (channels down, time across) showing only channels you starred.
+* **Guide** – same grid for every enabled channel.
+* **Search** – on-screen keyboard; results list channels by name (e.g. `KATC`, `ESPN`).
+* **Categories** – one entry per enabled group; opens the grid for just that group.
+* **Recordings / Scheduled / Settings**.
+
 Remote keys:
 
-| Screen      | OK                | \* (options)   | Back                |
-|-------------|-------------------|----------------|---------------------|
-| Live TV     | watch channel     | record now     | back to menu        |
-| Guide       | open channel guide → OK on a program to schedule it | | back to channel list |
-| Recordings  | play              | delete         |                     |
-| Scheduled   | cancel recording  |                |                     |
+| Screen        | Up/Down | Left/Right | OK | \* (options) | Back |
+|---------------|---------|------------|----|--------------|------|
+| Grid guides   | channel | program; past the edge scrolls time (also FF/RW) | Watch / Record / Cancel recording / Favorite menu | star / unstar channel | menu |
+| Search list   | channel | | same menu | star / unstar | menu |
+| Recordings    | | | play | delete | menu |
+| Scheduled     | | | cancel recording | | menu |
+
+Starring is stored on the Pi, so favorites set on the Roku also show first in the web Channels tab (and vice versa).
 
 ---
 
@@ -121,12 +131,14 @@ Remote keys:
 | Method | Path | |
 |---|---|---|
 | GET | `/api/status` | counts, last import times, active live sessions |
-| GET | `/api/channels[?group=]` | channels with `now`/`next` and `stream_url` |
+| GET | `/api/channels[?group=&favorites=1&q=]` | channels with `now`/`next` and `stream_url` |
+| POST | `/api/channels/<id>/favorite` | `{"favorite": true/false}` |
 | GET | `/api/groups` | playlist groups |
 | GET | `/api/epg/<channel_id>?hours=48` | programs for one channel |
-| GET | `/api/guide?hours=4` | all channels + programs (grid) |
+| GET | `/api/guide?hours=3&from=<epoch>[&group=&favorites=1&q=]` | channels + programs in the window, each program has `scheduled` |
 | GET/POST | `/api/schedules` | list / create (`{channel_id, program_start}` or `{channel_id, minutes}` or `{channel_id,start,stop,title}`) |
 | DELETE | `/api/schedules/<id>` | cancel |
+| DELETE | `/api/schedules/by-program?channel_id=&start=` | cancel by program |
 | GET | `/api/recordings` | list with `stream_url` |
 | DELETE | `/api/recordings/<id>` | delete files |
 | GET/POST | `/api/config` | read / update settings |

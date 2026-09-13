@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="GuideGrid" extends="Group">
+  <interface>
+    <!-- response of /api/guide: { start, end, now, channels: [ { id, name, num, favorite, programs: [...] } ] } -->
+    <field id="data" type="assocarray" onChange="onData" />
+    <field id="focusRow" type="integer" value="0" />
+    <!-- fired on OK: { channel: {...}, program: {...} or invalid } -->
+    <field id="selected" type="assocarray" alwaysNotify="true" />
+    <!-- fired on *: channel -->
+    <field id="favToggle" type="assocarray" alwaysNotify="true" />
+    <!-- fired when the user scrolls past the window edge: +1 / -1 -->
+    <field id="pageTime" type="integer" alwaysNotify="true" />
+    <!-- fired on back / left at column 0 -->
+    <field id="goBack" type="boolean" alwaysNotify="true" />
+    <field id="detail" type="string" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/GuideGrid.brs" />
+  <children>
+    <Group id="timebar" />
+    <Group id="rows" translation="[0,44]" />
+    <Rectangle id="nowline" width="2" height="0" color="#FF5A5A" translation="[0,40]" />
+  </children>
+</component>
