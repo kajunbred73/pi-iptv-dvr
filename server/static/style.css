@@ -29,3 +29,5 @@ video { width: 100%; max-width: 900px; margin-bottom: 12px; background: #000; }
 .badge.done { background: #27ae60; }
 .badge.scheduled { background: #2980b9; }
 .badge.failed { background: #7f8c8d; }
+.group-list { max-height: 320px; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px; margin: 10px 0; }
+.chk { display: flex; gap: 8px; align-items: center; font-size: 14px; }

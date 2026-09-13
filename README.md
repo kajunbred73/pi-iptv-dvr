@@ -30,10 +30,13 @@ bash scripts/install-pi.sh          # installs python3/ffmpeg, venv, systemd ser
 Then open `http://<pi-ip>:8080` in any browser on your network:
 
 1. **Settings** tab → either fill in the **Xtream Codes login** (server URL, username, password) or paste
-   your provider's **M3U playlist URL** and **XMLTV EPG URL** → *Save & import*.
-2. **Channels** tab lists everything with now/next from the guide. *Play* opens the HLS stream, *Rec* records the current show.
-3. **Guide** tab → pick a channel → *Record* any upcoming program.
-4. **Scheduled** / **Recordings** tabs manage the DVR.
+   your provider's **M3U playlist URL** and **XMLTV EPG URL** → *Save & import*. Only live channels are imported
+   (movies/series are skipped; with Xtream the small `player_api` list is used instead of the giant M3U).
+2. **Settings → Channel groups**: tick the groups you watch and *Save*. Only those channels are shown (web + Roku)
+   and only their guide data is downloaded — essential on a Pi 3 with providers that list thousands of channels.
+3. **Channels** tab lists everything with now/next from the guide. *Play* opens the HLS stream, *Rec* records the current show.
+4. **Guide** tab → pick a channel → *Record* any upcoming program.
+5. **Scheduled** / **Recordings** tabs manage the DVR.
 
 The playlist and guide re-import automatically every 6 h (configurable via `POST /api/config`).
 

@@ -19,6 +19,13 @@ CREATE TABLE IF NOT EXISTS channels (
     favorite INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_channels_tvg ON channels(tvg_id);
+CREATE INDEX IF NOT EXISTS idx_channels_grp ON channels(grp);
+
+CREATE TABLE IF NOT EXISTS groups (
+    name TEXT PRIMARY KEY,
+    enabled INTEGER DEFAULT 0,
+    count INTEGER DEFAULT 0
+);
 
 CREATE TABLE IF NOT EXISTS programs (
     id INTEGER PRIMARY KEY,
@@ -69,6 +76,7 @@ def conn():
         c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=NORMAL")
         _local.conn = c
     return c
 

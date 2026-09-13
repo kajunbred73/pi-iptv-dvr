@@ -31,6 +31,9 @@ def _base_url():
     return request.url_root.rstrip("/")
 
 
+_ENABLED = "WHERE grp IN (SELECT name FROM groups WHERE enabled=1)"
+
+
 def _channel_json(ch):
     ch = dict(ch)
     ch["stream_url"] = f"{_base_url()}/live/{ch['id']}/index.m3u8"
@@ -75,7 +78,9 @@ def api_status():
         "ok": True,
         "name": "pi-iptv-dvr",
         "time": _now(),
-        "channels": db.row("SELECT COUNT(*) c FROM channels")["c"],
+        "channels": db.row(f"SELECT COUNT(*) c FROM channels {_ENABLED}")["c"],
+        "channels_total": db.row("SELECT COUNT(*) c FROM channels")["c"],
+        "groups_enabled": db.row("SELECT COUNT(*) c FROM groups WHERE enabled=1")["c"],
         "programs": db.row("SELECT COUNT(*) c FROM programs")["c"],
         "recordings": db.row("SELECT COUNT(*) c FROM recordings")["c"],
         "m3u_last": int(db.get_meta("m3u_last", 0) or 0),
@@ -89,7 +94,8 @@ def api_status():
 def api_channels():
     now = _now()
     grp = request.args.get("group")
-    q = "SELECT * FROM channels" + (" WHERE grp=?" if grp else "") + " ORDER BY favorite DESC, num, name"
+    where = "WHERE grp=?" if grp else _ENABLED
+    q = f"SELECT * FROM channels {where} ORDER BY favorite DESC, num, name"
     with_epg = request.args.get("epg", "1") != "0"
     cur, nxt = _now_next_all(now) if with_epg else ({}, {})
     out = []
@@ -104,7 +110,19 @@ def api_channels():
 
 @app.get("/api/groups")
 def api_groups():
-    return jsonify([r["grp"] for r in db.rows("SELECT DISTINCT grp FROM channels WHERE grp != '' ORDER BY grp")])
+    return jsonify(db.rows("SELECT name, enabled, count FROM groups ORDER BY name"))
+
+
+@app.post("/api/groups")
+def api_groups_save():
+    """Body: {"enabled": ["Group A", "Group B"]}. Re-imports the guide for the new selection."""
+    enabled = set((request.json or {}).get("enabled", []))
+    c = db.conn()
+    c.execute("UPDATE groups SET enabled=0")
+    c.executemany("UPDATE groups SET enabled=1 WHERE name=?", [(g,) for g in enabled])
+    c.commit()
+    playlist.refresh_async(epg_only=True)
+    return jsonify({"ok": True, "enabled": len(enabled)})
 
 
 @app.post("/api/channels/<int:cid>/favorite")
@@ -138,7 +156,7 @@ def api_guide():
     for p in db.rows("SELECT tvg_id,start,stop,title FROM programs WHERE stop>? AND start<? ORDER BY start", (now, end)):
         progs.setdefault(p["tvg_id"], []).append(p)
     out = []
-    for ch in db.rows("SELECT * FROM channels ORDER BY favorite DESC, num, name"):
+    for ch in db.rows(f"SELECT * FROM channels {_ENABLED} ORDER BY favorite DESC, num, name"):
         cj = _channel_json(ch)
         cj["programs"] = progs.get(ch["tvg_id"], [])
         out.append(cj)
@@ -253,7 +271,7 @@ def recording_file(rid, fname):
 def proxied_playlist():
     """M3U of the proxied HLS streams, handy for VLC/Kodi on the same network."""
     lines = ["#EXTM3U"]
-    for ch in db.rows("SELECT * FROM channels ORDER BY num"):
+    for ch in db.rows(f"SELECT * FROM channels {_ENABLED} ORDER BY num"):
         lines.append(f'#EXTINF:-1 tvg-id="{ch["tvg_id"]}" tvg-logo="{ch["logo"]}" group-title="{ch["grp"]}",{ch["name"]}')
         lines.append(f"{_base_url()}/live/{ch['id']}/index.m3u8")
     return "\n".join(lines) + "\n", 200, {"Content-Type": "audio/x-mpegurl"}
@@ -268,8 +286,11 @@ def index():
 
 @app.post("/setup")
 def setup():
-    config.save({"m3u_url": request.form.get("m3u_url", "").strip(),
-                 "epg_url": request.form.get("epg_url", "").strip()})
+    updates = {"m3u_url": request.form.get("m3u_url", "").strip(),
+               "epg_url": request.form.get("epg_url", "").strip()}
+    if updates["m3u_url"] != config.get("m3u_url"):
+        updates.update(xtream_host="", xtream_user="", xtream_pass="")
+    config.save(updates)
     playlist.refresh_async()
     return redirect(url_for("index", tab="settings"))
 

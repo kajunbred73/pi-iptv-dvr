@@ -59,6 +59,13 @@
     <button type="button" id="refresh-btn">Refresh now</button>
   </form>
   <div class="card">
+    <h2>Channel groups</h2>
+    <p class="muted">Tick the groups you actually watch. Only these appear in the channel list and on the Roku, and only their guide data is downloaded (keeps the Pi fast).</p>
+    <div class="toolbar"><input id="group-filter" placeholder="Filter groups…"> <button type="button" class="secondary" id="groups-none">Untick all</button></div>
+    <div id="group-list" class="group-list"></div>
+    <button type="button" id="groups-save">Save groups &amp; reload guide</button>
+  </div>
+  <div class="card">
     <h2>Roku setup</h2>
     <p>In the Roku channel, enter this server address: <code id="server-addr"></code></p>
     <p>Other players (VLC, Kodi) can use <a href="/playlist.m3u">/playlist.m3u</a>.</p>

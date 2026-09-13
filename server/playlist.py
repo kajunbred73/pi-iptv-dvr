@@ -4,6 +4,7 @@ Designed for a Raspberry Pi: downloads stream to disk and the XMLTV is parsed
 incrementally, so memory stays flat even for multi-hundred-MB guide files.
 """
 import gzip
+import json
 import logging
 import os
 import re
@@ -14,6 +15,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
 import requests
+from urllib.parse import quote
 
 import config
 import db
@@ -80,26 +82,74 @@ def parse_m3u(text):
     return list(parse_m3u_lines(text.splitlines()))
 
 
+_VOD = re.compile(r"/(movie|series)/|\.(mp4|mkv|avi|mov|flv|wmv)(\?|$)", re.I)
+
+
+def _is_live(url):
+    return not _VOD.search(url)
+
+
+def _m3u_channels():
+    path = _download(config.get("m3u_url"), _tmp("playlist.m3u"))
+    with _open_maybe_gzip(path) as fh:
+        lines = (l.decode("utf-8", "replace") for l in fh)
+        for ch in parse_m3u_lines(lines):
+            if _is_live(ch["url"]):
+                yield ch
+
+
+def _xtream_channels():
+    """Live channels via the Xtream player_api (a few MB) instead of the full
+    M3U, which on most providers also lists every movie/series."""
+    host, user, pw = config.get("xtream_host"), config.get("xtream_user"), config.get("xtream_pass")
+    base = f"{host}/player_api.php?username={quote(user)}&password={quote(pw)}"
+    with open(_download(base + "&action=get_live_categories", _tmp("cats.json")), "rb") as f:
+        cats = {str(c.get("category_id")): c.get("category_name", "") for c in (json.load(f) or [])}
+    with open(_download(base + "&action=get_live_streams", _tmp("live.json")), "rb") as f:
+        streams = json.load(f) or []
+    for s in streams:
+        sid = s.get("stream_id")
+        if sid is None:
+            continue
+        num = s.get("num")
+        yield {
+            "name": s.get("name") or "Unknown",
+            "tvg_id": s.get("epg_channel_id") or "",
+            "logo": s.get("stream_icon") or "",
+            "grp": cats.get(str(s.get("category_id")), ""),
+            "num": int(num) if isinstance(num, int) or str(num).isdigit() else None,
+            "url": f"{host}/live/{quote(user)}/{quote(pw)}/{sid}.ts",
+        }
+
+
 def import_m3u(url=None):
-    url = url or config.get("m3u_url")
-    if not url:
+    xtream = all(config.get(k) for k in ("xtream_host", "xtream_user", "xtream_pass"))
+    if not xtream and not (url or config.get("m3u_url")):
         return 0
-    path = _download(url, _tmp("playlist.m3u"))
+    if url:
+        config.save({"m3u_url": url})
+    source = _xtream_channels() if xtream else _m3u_channels()
     c = db.conn()
     favs = {r["url"]: r["favorite"] for r in db.rows("SELECT url, favorite FROM channels")}
     count = 0
-    with _open_maybe_gzip(path) as fh:
-        lines = (l.decode("utf-8", "replace") for l in fh)
-        c.execute("DELETE FROM channels")
-        for i, ch in enumerate(parse_m3u_lines(lines), 1):
-            c.execute(
-                "INSERT INTO channels(num, name, tvg_id, logo, grp, url, favorite) VALUES(?,?,?,?,?,?,?)",
-                (ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"], ch["grp"], ch["url"], favs.get(ch["url"], 0)),
-            )
-            count += 1
-        c.commit()
+    groups = {}
+    c.execute("DELETE FROM channels")
+    for i, ch in enumerate(source, 1):
+        c.execute(
+            "INSERT INTO channels(num, name, tvg_id, logo, grp, url, favorite) VALUES(?,?,?,?,?,?,?)",
+            (ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"], ch["grp"], ch["url"], favs.get(ch["url"], 0)),
+        )
+        groups[ch["grp"]] = groups.get(ch["grp"], 0) + 1
+        count += 1
+    # New groups start enabled only for small playlists; otherwise the user picks in Settings.
+    default_on = 1 if count <= 500 else 0
+    c.executemany("INSERT OR IGNORE INTO groups(name, enabled) VALUES(?,?)", [(g, default_on) for g in groups])
+    c.executemany("UPDATE groups SET count=? WHERE name=?", [(n, g) for g, n in groups.items()])
+    if groups:
+        c.execute("DELETE FROM groups WHERE name NOT IN (%s)" % ",".join("?" * len(groups)), list(groups))
+    c.commit()
     db.set_meta("m3u_last", int(time.time()))
-    log.info("imported %d channels", count)
+    log.info("imported %d live channels in %d groups", count, len(groups))
     return count
 
 
@@ -125,7 +175,11 @@ def import_epg(url=None, max_days=3):
     if not url:
         return 0
     path = _download(url, _tmp("epg.xml"))
-    wanted = {r["tvg_id"] for r in db.rows("SELECT DISTINCT tvg_id FROM channels WHERE tvg_id != ''")}
+    wanted = {r["tvg_id"] for r in db.rows(
+        "SELECT DISTINCT tvg_id FROM channels WHERE tvg_id != '' AND grp IN (SELECT name FROM groups WHERE enabled=1)")}
+    if not wanted:
+        log.info("no enabled groups with EPG ids; skipping guide import")
+        return 0
     now = int(time.time())
     cutoff_lo, cutoff_hi = now - 6 * 3600, now + max_days * 86400
     count = 0
@@ -169,19 +223,20 @@ def import_epg(url=None, max_days=3):
 
 # ---------------------------------------------------------------- orchestration
 
-def refresh_all():
+def refresh_all(epg_only=False):
     """Synchronous import of playlist then EPG. Returns a summary dict."""
     if not _lock.acquire(blocking=False):
         return {"busy": True}
     result = {}
     state.update(running=True, started=int(time.time()), finished=0, result={})
     try:
-        state["step"] = "playlist"
-        try:
-            result["channels"] = import_m3u()
-        except Exception as e:
-            log.exception("m3u import failed")
-            result["channels_error"] = str(e)
+        if not epg_only:
+            state["step"] = "playlist"
+            try:
+                result["channels"] = import_m3u()
+            except Exception as e:
+                log.exception("m3u import failed")
+                result["channels_error"] = str(e)
         state["step"] = "guide"
         try:
             result["programs"] = import_epg()
@@ -195,9 +250,9 @@ def refresh_all():
     return result
 
 
-def refresh_async():
+def refresh_async(epg_only=False):
     """Kick off refresh_all in the background; returns immediately."""
     if state["running"]:
         return False
-    threading.Thread(target=refresh_all, daemon=True).start()
+    threading.Thread(target=refresh_all, args=(epg_only,), daemon=True).start()
     return True

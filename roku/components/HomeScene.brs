@@ -396,7 +396,7 @@ sub onApiResponse(ev as Object)
             if ch.now <> invalid then line = line + "   -   " + txt(ch.now.title)
             labels.push(line)
         end for
-        setRows(labels, r.items, "No channels. Add your M3U URL on the Pi's web page.")
+        setRows(labels, r.items, "No channels enabled. On the Pi web page go to Settings > Channel groups and tick the groups you watch.")
     else if tag = "programs"
         if m.mode <> "programs" then return
         labels = []

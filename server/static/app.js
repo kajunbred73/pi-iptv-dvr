@@ -23,15 +23,19 @@ document.querySelectorAll("nav a").forEach(a => a.onclick = e => {
 // ---- channels
 async function loadChannels() {
   channels = await api("/channels");
-  const groups = await api("/groups");
+  const groups = (await api("/groups")).filter(g => g.enabled);
   const sel = $("#chan-group");
-  sel.innerHTML = '<option value="">All groups</option>' + groups.map(g => `<option>${esc(g)}</option>`).join("");
+  sel.innerHTML = '<option value="">All groups</option>' + groups.map(g => `<option>${esc(g.name)}</option>`).join("");
   $("#guide-chan").innerHTML = channels.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
   renderChannels();
 }
 function renderChannels() {
   const f = $("#chan-filter").value.toLowerCase(), g = $("#chan-group").value;
   const rows = channels.filter(c => (!g || c.grp === g) && (!f || c.name.toLowerCase().includes(f)));
+  if (!channels.length) {
+    $("#chan-table tbody").innerHTML = `<tr><td colspan="6" class="muted">No channels enabled yet. Go to <a href="#" onclick="document.querySelector('nav a[data-tab=settings]').click();return false">Settings → Channel groups</a> and tick the groups you watch.</td></tr>`;
+    return;
+  }
   $("#chan-table tbody").innerHTML = rows.slice(0, 500).map(c => `
     <tr>
       <td>${c.num}</td>
@@ -96,6 +100,24 @@ window.delRec = async id => { if (confirm("Delete recording?")) { await api(`/re
 
 // ---- settings / status
 $("#server-addr").textContent = location.host;
+let groups = [];
+async function loadGroups() {
+  groups = await api("/groups");
+  renderGroups();
+}
+function renderGroups() {
+  const f = $("#group-filter").value.toLowerCase();
+  $("#group-list").innerHTML = groups.length ? groups.filter(g => !f || g.name.toLowerCase().includes(f)).map(g => `
+    <label class="chk"><input type="checkbox" data-g="${esc(g.name)}" ${g.enabled ? "checked" : ""}> ${esc(g.name || "(no group)")} <span class="muted">(${g.count})</span></label>`).join("")
+    : '<p class="muted">No groups yet — import a playlist first.</p>';
+}
+$("#group-filter").oninput = renderGroups;
+$("#group-list").onchange = e => { const g = groups.find(x => x.name === e.target.dataset.g); if (g) g.enabled = e.target.checked ? 1 : 0; };
+$("#groups-none").onclick = () => { groups.forEach(g => g.enabled = 0); renderGroups(); };
+$("#groups-save").onclick = async () => {
+  await api("/groups", { method: "POST", body: { enabled: groups.filter(g => g.enabled).map(g => g.name) } });
+  loadStatus();
+};
 $("#refresh-btn").onclick = async () => { await api("/refresh", { method: "POST" }); loadStatus(); };
 let wasImporting = false;
 async function loadStatus() {
@@ -107,15 +129,15 @@ async function loadStatus() {
     wasImporting = true;
     setTimeout(loadStatus, 3000);
   } else {
-    text = `${s.channels} channels · ${s.programs} programs · EPG ${s.epg_last ? fmt(s.epg_last) : "never"}` +
+    text = `${s.channels} of ${s.channels_total} channels enabled (${s.groups_enabled} groups) · ${s.programs} programs · EPG ${s.epg_last ? fmt(s.epg_last) : "never"}` +
       (s.live_sessions.length ? ` · streaming: ${s.live_sessions.map(l => l.name).join(", ")}` : "");
     const err = imp.result && (imp.result.channels_error || imp.result.programs_error);
     if (err) text = `Import error: ${err} · ` + text;
-    if (wasImporting) { wasImporting = false; loadChannels(); }
+    if (wasImporting) { wasImporting = false; loadChannels(); loadGroups(); }
   }
   $("#status").textContent = text;
 }
-const loaders = { channels: loadChannels, guide: loadGuide, schedules: loadSchedules, recordings: loadRecordings };
+const loaders = { channels: loadChannels, guide: loadGuide, schedules: loadSchedules, recordings: loadRecordings, settings: loadGroups };
 loadStatus(); loadChannels();
 setInterval(loadStatus, 15000);
 const startTab = new URLSearchParams(location.search).get("tab");
