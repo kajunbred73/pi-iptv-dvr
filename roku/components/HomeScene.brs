@@ -98,8 +98,24 @@ function txt(v as Dynamic) as String
     return v.toStr()
 end function
 
+' Percent-encode for a query string (roUrlTransfer is not allowed on the render thread).
 function urlEnc(s as String) as String
-    return CreateObject("roUrlTransfer").escape(s)
+    safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+    ba = CreateObject("roByteArray")
+    ba.fromAsciiString(s)
+    out = ""
+    for i = 0 to ba.count() - 1
+        b = ba[i]
+        c = Chr(b)
+        if b < 128 and Instr(1, safe, c) > 0
+            out = out + c
+        else
+            hx = StrI(b, 16)
+            if Len(hx) < 2 then hx = "0" + hx
+            out = out + "%" + UCase(hx)
+        end if
+    end for
+    return out
 end function
 
 sub api(path as String, tag as String, method = "GET" as String, body = "" as String)
