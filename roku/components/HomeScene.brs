@@ -613,6 +613,8 @@ sub onApiResponse(ev as Object)
             labels.push(line)
         end for
         setRows(labels, r.items, "No channels match '" + m.lastQuery + "'. Only channels in enabled groups are searched (Pi Settings > Channel groups).")
+        m.hint.text = "OK: watch / record / favorite   *: star   Left: menu"
+        if labels.count() > 0 and m.top.dialog = invalid then m.content.setFocus(true)
     else if tag = "groups"
         if m.mode <> "categories" then return
         labels = []
