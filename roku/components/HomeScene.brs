@@ -134,7 +134,7 @@ end sub
 
 sub showTab(idx as Integer)
     tabName = m.tabs[idx]
-    m.heading.text = tab
+    m.heading.text = tabName
     if tabName = "Live TV"
         m.mode = "live"
         m.hint.text = "OK: watch   *: record"
