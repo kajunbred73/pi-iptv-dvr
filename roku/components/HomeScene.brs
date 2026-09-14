@@ -40,9 +40,15 @@ sub init()
     m.recordingId = -1
     m.playTitle = ""
     m.streamUrl = ""
+    m.isLive = false
     m.retryCount = 0
     m.retrying = false
     m.readyAttempts = 0
+    m.resumeRecordingId = -1
+    m.resumeUrl = ""
+    m.resumeTitle = ""
+    m.resumeLive = false
+    m.resumePos = 0
 
     m.reg = CreateObject("roRegistrySection", "piiptv")
     m.server = ""
@@ -102,10 +108,30 @@ function fmtSize(b as Dynamic) as String
     return Int(b / 1000000).toStr() + " MB"
 end function
 
+function fmtDuration(t as Dynamic) as String
+    if t = invalid then return ""
+    t = Int(t)
+    h = Int(t / 3600)
+    m = Int((t mod 3600) / 60)
+    s = t mod 60
+    if h > 0
+        return h.toStr() + ":" + pad2(m) + ":" + pad2(s)
+    else
+        return m.toStr() + ":" + pad2(s)
+    end if
+end function
+
 function txt(v as Dynamic) as String
     if v = invalid then return ""
     if type(v) = "roString" or type(v) = "String" then return v
     return v.toStr()
+end function
+
+function readResumePos(recordingId as Dynamic) as Float
+    if recordingId = invalid then return 0
+    v = m.reg.read("pos_" + recordingId.toStr())
+    if v = invalid or v = "" then return 0
+    return v.toFloat()
 end function
 
 ' Percent-encode for a query string (roUrlTransfer is not allowed on the render thread).
@@ -277,8 +303,13 @@ sub onContentSelected()
         openGrid("group=" + urlEnc(it.name), txt(it.name), txt(it.count) + " channels in this category")
         m.grid.setFocus(true)
     else if m.mode = "recordings"
-        m.recordingId = -1
-        play(it.stream_url, it.title, false)
+        m.recordingId = it.id
+        saved = readResumePos(it.id)
+        if saved > 5
+            showResumeDialog(it.stream_url, it.title, false, saved, it.id)
+        else
+            play(it.stream_url, it.title, false)
+        end if
     else if m.mode = "scheduled"
         confirm("Cancel recording '" + txt(it.title) + "'?", "cancel", { id: it.id })
     else if m.mode = "settings"
@@ -448,6 +479,12 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
         return false
     end if
     if key = "back"
+        if m.top.dialog <> invalid and m.top.dialog.resume = true
+            m.top.dialog.close = true
+            m.top.dialog = invalid
+            focusPane()
+            return true
+        end if
         if m.content.hasFocus() or m.grid.hasFocus()
             m.menu.setFocus(true)
             return true
@@ -567,8 +604,9 @@ end sub
 
 ' ------------------------------------------------------------------ playback
 
-sub play(url as String, title as String, isLive as Boolean)
+sub play(url as String, title as String, isLive as Boolean, startPos = 0 as Float)
     m.playTitle = title
+    m.isLive = isLive
     m.retryCount = 0
     m.retrying = false
     if m.top.dialog <> invalid and m.top.dialog.loading = true
@@ -581,9 +619,7 @@ sub play(url as String, title as String, isLive as Boolean)
     c.title = title
     c.streamFormat = "hls"
     c.live = isLive
-    if isLive
-        c.playStart = 0
-    end if
+    c.playStart = startPos
     m.video.content = c
     m.video.loop = false
     m.video.visible = true
@@ -609,6 +645,36 @@ sub hideLoading()
         m.top.dialog.close = true
         m.top.dialog = invalid
     end if
+end sub
+
+sub showResumeDialog(url as String, title as String, isLive as Boolean, pos as Float, recordingId as Integer)
+    m.resumeUrl = url
+    m.resumeTitle = title
+    m.resumeLive = isLive
+    m.resumePos = pos
+    m.resumeRecordingId = recordingId
+    hideLoading()
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = "Resume viewing?"
+    d.message = "Resume from " + fmtDuration(pos) + " or start over?"
+    d.buttons = ["Resume", "Start over"]
+    d.addField("resume", "boolean", false)
+    d.resume = true
+    d.observeField("buttonSelected", "onResumeDialog")
+    m.top.dialog = d
+    d.setFocus(true)
+end sub
+
+sub onResumeDialog(ev as Object)
+    d = ev.getRoSGNode()
+    d.close = true
+    m.top.dialog = invalid
+    idx = ev.getData()
+    if idx < 0 then return
+    startPos = 0
+    if idx = 0 then startPos = m.resumePos
+    m.recordingId = m.resumeRecordingId
+    play(m.resumeUrl, m.resumeTitle, m.resumeLive, startPos)
 end sub
 
 sub playChannel(ch as Object)
@@ -656,12 +722,26 @@ sub onTrickMenu(ev as Object)
     m.video.setFocus(true)
 end sub
 
-sub stopVideo()
+sub stopVideo(clearResume = false as Boolean)
+    if m.recordingId >= 0
+        if clearResume
+            m.reg.delete("pos_" + m.recordingId.toStr())
+            m.reg.flush()
+        else
+            pos = m.video.position
+            dur = m.video.duration
+            if pos > 5 and (dur <= 0 or pos < dur - 15)
+                m.reg.write("pos_" + m.recordingId.toStr(), pos.toStr())
+                m.reg.flush()
+            end if
+        end if
+    end if
     hideLoading()
     m.readyTimer.control = "stop"
     m.video.control = "stop"
     m.video.visible = false
     m.recordingId = -1
+    m.isLive = false
     m.retrying = false
     m.retryTimer.control = "stop"
     focusPane()
@@ -675,7 +755,7 @@ sub onVideoState()
         m.retryCount = 0
         m.retrying = false
     else if st = "error"
-        if m.recordingId >= 0 and m.retryCount < 15 and not m.retrying
+        if m.recordingId >= 0 and m.isLive and m.retryCount < 15 and not m.retrying
             m.retrying = true
             m.retryCount = m.retryCount + 1
             m.retryTimer.control = "start"
@@ -684,7 +764,7 @@ sub onVideoState()
             toast("Playback error: " + txt(m.video.errorMsg) + " (code " + txt(m.video.errorCode) + ")")
         end if
     else if st = "finished"
-        stopVideo()
+        stopVideo(true)
     end if
 end sub
 
@@ -742,7 +822,12 @@ sub onApiResponse(ev as Object)
     else if tag = "readycheck"
         if r.ready = true or r.ready = 1
             m.readyTimer.control = "stop"
-            play(m.streamUrl, m.playTitle, true)
+            saved = readResumePos(m.recordingId)
+            if saved > 5
+                showResumeDialog(m.streamUrl, m.playTitle, true, saved, m.recordingId)
+            else
+                play(m.streamUrl, m.playTitle, true)
+            end if
         else
             m.readyAttempts = m.readyAttempts + 1
             if m.readyAttempts > 60
@@ -798,7 +883,7 @@ sub onApiResponse(ev as Object)
             tagTxt = ""
             if rec.status = "recording" then tagTxt = "  [RECORDING]"
             if rec.status = "failed" then tagTxt = "  [FAILED]"
-            labels.push(fmtDay(rec.start) + " " + fmtTime(rec.start) + "   " + txt(rec.title) + "   (" + txt(rec.channel_name) + ", " + fmtSize(rec.size_bytes) + ")" + tagTxt)
+            labels.push(fmtDay(rec.start) + " " + fmtTime(rec.start) + "   " + txt(rec.title) + "   (" + fmtDuration(rec.duration) + ", " + txt(rec.channel_name) + ", " + fmtSize(rec.size_bytes) + ")" + tagTxt)
         end for
         setRows(labels, r.items, "No recordings yet. Pick a show in the Guide and choose Record.")
     else if tag = "schedules"

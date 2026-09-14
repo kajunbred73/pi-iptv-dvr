@@ -309,8 +309,13 @@ def api_schedule_delete(sid):
 @app.get("/api/recordings")
 def api_recordings():
     out = []
+    now = _now()
     for r in db.rows("SELECT * FROM recordings ORDER BY start DESC"):
         r["stream_url"] = f"{_base_url()}/recordings/{r['id']}/index.m3u8"
+        if r["status"] == "recording":
+            r["duration"] = now - r["start"]
+        else:
+            r["duration"] = r["stop"] - r["start"]
         out.append(r)
     return jsonify(out)
 
