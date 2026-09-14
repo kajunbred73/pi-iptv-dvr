@@ -10,6 +10,8 @@ sub init()
     m.hint = m.top.findNode("hint")
     m.status = m.top.findNode("status")
     m.video = m.top.findNode("video")
+    m.readyTimer = m.top.findNode("readyTimer")
+    m.readyTimer.observeField("fire", "onReadyCheck")
     m.retryTimer = m.top.findNode("retryTimer")
     m.retryTimer.observeField("fire", "onRetry")
     m.statusTimer = m.top.findNode("statusTimer")
@@ -37,8 +39,10 @@ sub init()
     m.tasks = {}
     m.recordingId = -1
     m.playTitle = ""
+    m.streamUrl = ""
     m.retryCount = 0
     m.retrying = false
+    m.readyAttempts = 0
 
     m.reg = CreateObject("roRegistrySection", "piiptv")
     m.server = ""
@@ -650,6 +654,7 @@ end sub
 
 sub stopVideo()
     hideLoading()
+    m.readyTimer.control = "stop"
     m.video.control = "stop"
     m.video.visible = false
     m.recordingId = -1
@@ -686,6 +691,12 @@ sub onRetry()
     end if
 end sub
 
+sub onReadyCheck()
+    if m.recordingId >= 0
+        api("/timeshift/" + m.recordingId.toStr() + "/ready", "readycheck")
+    end if
+end sub
+
 ' ------------------------------------------------------------------ API responses
 
 sub loadStatus()
@@ -694,7 +705,10 @@ end sub
 
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
-    if t.tag = "timeshift" or t.tag = "keep" then hideLoading()
+    if t.tag = "timeshift" or t.tag = "keep" or t.tag = "readycheck"
+        m.readyTimer.control = "stop"
+        hideLoading()
+    end if
     if t.tag = "status"
         m.status.text = "Cannot reach " + m.server
     else
@@ -713,10 +727,25 @@ sub onApiResponse(ev as Object)
     else if tag = "timeshift"
         if r.ok = true or r.ok = 1
             m.recordingId = r.recording_id
-            play(r.stream_url, txt(m.pendingChannel.name), false)
+            m.streamUrl = r.stream_url
+            m.playTitle = txt(m.pendingChannel.name)
+            m.readyAttempts = 0
+            m.readyTimer.control = "start"
         else
             hideLoading()
             toast("Could not start timeshift: " + txt(r.error))
+        end if
+    else if tag = "readycheck"
+        if r.ready = true or r.ready = 1
+            m.readyTimer.control = "stop"
+            play(m.streamUrl, m.playTitle, false)
+        else
+            m.readyAttempts = m.readyAttempts + 1
+            if m.readyAttempts > 60
+                m.readyTimer.control = "stop"
+                hideLoading()
+                toast("Recording did not start on the Pi")
+            end if
         end if
     else if tag = "keep"
         if r.ok = true or r.ok = 1

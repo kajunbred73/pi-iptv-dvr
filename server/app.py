@@ -275,6 +275,21 @@ def api_timeshift_keep(rid):
     return jsonify({"ok": True})
 
 
+@app.get("/api/timeshift/<int:rid>/ready")
+def api_timeshift_ready(rid):
+    """Return true once the recording has at least one HLS segment."""
+    rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,)) or abort(404)
+    pl = os.path.join(config.get("recordings_dir"), rec["path"], "index.m3u8")
+    ready = False
+    if os.path.exists(pl):
+        try:
+            text = open(pl).read(8192)
+            ready = ".ts" in text
+        except Exception:
+            pass
+    return jsonify({"ok": True, "ready": ready, "stream_url": f"{_base_url()}/recordings/{rid}/index.m3u8"})
+
+
 @app.delete("/api/schedules/by-program")
 def api_schedule_delete_by_program():
     """Cancel the schedule for ?channel_id=&start= (used by the guide grid)."""
