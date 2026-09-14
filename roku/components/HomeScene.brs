@@ -581,7 +581,11 @@ sub play(url as String, title as String, isLive as Boolean)
     c.title = title
     c.streamFormat = "hls"
     c.live = isLive
+    if isLive
+        c.playStart = 0
+    end if
     m.video.content = c
+    m.video.loop = false
     m.video.visible = true
     m.video.control = "play"
 end sub
@@ -738,7 +742,7 @@ sub onApiResponse(ev as Object)
     else if tag = "readycheck"
         if r.ready = true or r.ready = 1
             m.readyTimer.control = "stop"
-            play(m.streamUrl, m.playTitle, false)
+            play(m.streamUrl, m.playTitle, true)
         else
             m.readyAttempts = m.readyAttempts + 1
             if m.readyAttempts > 60
