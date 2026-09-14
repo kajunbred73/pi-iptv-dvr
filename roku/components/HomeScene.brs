@@ -41,6 +41,7 @@ sub init()
     m.playTitle = ""
     m.streamUrl = ""
     m.isLive = false
+    m.startPos = 0
     m.retryCount = 0
     m.retrying = false
     m.readyAttempts = 0
@@ -304,11 +305,12 @@ sub onContentSelected()
         m.grid.setFocus(true)
     else if m.mode = "recordings"
         m.recordingId = it.id
+        isLive = (it.status = "recording")
         saved = readResumePos(it.id)
-        if saved > 5
-            showResumeDialog(it.stream_url, it.title, false, saved, it.id)
+        if saved > 5 and not isLive
+            showResumeDialog(it.stream_url, it.title, isLive, saved, it.id)
         else
-            play(it.stream_url, it.title, false)
+            play(it.stream_url, it.title, isLive)
         end if
     else if m.mode = "scheduled"
         confirm("Cancel recording '" + txt(it.title) + "'?", "cancel", { id: it.id })
@@ -607,6 +609,7 @@ end sub
 sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.playTitle = title
     m.isLive = isLive
+    m.startPos = startPos
     m.retryCount = 0
     m.retrying = false
     if m.top.dialog <> invalid and m.top.dialog.loading = true
@@ -619,9 +622,6 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     c.title = title
     c.streamFormat = "hls"
     c.live = isLive
-    if not isLive
-        c.playStart = startPos
-    end if
     m.video.content = c
     m.video.loop = false
     m.video.visible = true
@@ -754,6 +754,10 @@ sub onVideoState()
     if st = "playing"
         hideLoading()
         m.video.setFocus(true)
+        if not m.isLive and m.startPos > 0
+            m.video.seek = m.startPos
+            m.startPos = 0
+        end if
         m.retryCount = 0
         m.retrying = false
     else if st = "error"
