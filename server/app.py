@@ -412,7 +412,8 @@ def setup_xtream():
     pw = request.form.get("xtream_pass", "").strip()
     if host and not host.startswith("http"):
         host = "http://" + host
-    updates = {"xtream_host": host, "xtream_user": user, "xtream_pass": pw}
+    updates = {"xtream_host": host, "xtream_user": user, "xtream_pass": pw,
+               "xtream_hls_input": request.form.get("xtream_hls_input") == "1"}
     if host and user and pw:
         creds = f"username={quote(user)}&password={quote(pw)}"
         updates["m3u_url"] = f"{host}/get.php?{creds}&type=m3u_plus&output=ts"

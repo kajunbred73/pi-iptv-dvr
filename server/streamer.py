@@ -15,9 +15,23 @@ log = logging.getLogger("streamer")
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 
 
+_XTREAM_TS = re.compile(r"(/live/[^/]+/[^/]+/\d+)\.ts$")
+
+
+def _input_url(url):
+    if config.get("xtream_hls_input"):
+        return _XTREAM_TS.sub(r"\1.m3u8", url)
+    return url
+
+
 def _input_args(url):
+    url = _input_url(url)
+    # IPTV feeds are full of corrupt packets and timestamp jumps; drop the junk and let ffmpeg
+    # regenerate timestamps so the copied-through output stays monotonic (otherwise the Roku
+    # jumps back every few seconds).
     args = ["-hide_banner", "-loglevel", "warning", "-nostdin",
-            "-fflags", "+genpts+discardcorrupt"]
+            "-fflags", "+genpts+discardcorrupt+igndts", "-err_detect", "ignore_err",
+            "-analyzeduration", "3000000", "-probesize", "5000000"]
     if url.startswith("http"):
         args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
                  "-user_agent", config.get("user_agent")]
@@ -30,7 +44,9 @@ def _input_args(url):
 def _copy_args():
     # Remux only (no transcoding) so a Pi can keep up. Roku plays H.264/AAC HLS,
     # which is what nearly all IPTV sources already are.
-    return ["-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-sn", "-dn"]
+    return ["-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-sn", "-dn",
+            "-avoid_negative_ts", "make_zero", "-max_interleave_delta", "0",
+            "-muxdelay", "0", "-muxpreload", "0"]
 
 
 # ---------------------------------------------------------------- live proxy
