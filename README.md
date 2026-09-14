@@ -108,7 +108,8 @@ Remote keys:
 |---------------|---------|------------|----|--------------|------|
 | Grid guides   | channel | program; past the edge scrolls time (also FF/RW) | Watch / Record / Cancel recording / Favorite menu | star / unstar channel | menu |
 | Search list   | channel | | same menu | star / unstar | menu |
-| Recordings    | | | play | delete | menu |
+| Watching live | Down = Pause / Back 30s / Forward 30s / Jump to live / Keep recording menu | native trickplay (also Play/Pause, RW/FF) | | | stop |
+| Recordings    | | | play (offers Resume) | delete | menu |
 | Scheduled     | | | cancel recording | | menu |
 
 Starring is stored on the Pi, so favorites set on the Roku also show first in the web Channels tab (and vice versa).
@@ -117,9 +118,17 @@ Starring is stored on the Pi, so favorites set on the Roku also show first in th
 
 ## 3. How it works
 
-* **Live**: the first viewer of a channel starts `ffmpeg -i <provider url> -c copy -f hls` into
-  `data/live/<id>/`; the Roku (or VLC, Kodi – see `/playlist.m3u`) plays `/live/<id>/index.m3u8`.
-  The ffmpeg process is stopped ~30 s after the last segment request.
+* **Live (Roku, with pause/rewind)**: watching a channel starts a *live buffer* – a real
+  recording of the current show (`POST /api/timeshift`) written as a growing event playlist with
+  3 s segments. The Roku waits for `timeshift_min_segments` (3) before playing so it never runs
+  off the end of the playlist (which is what caused the earlier stutter/looping), then joins at
+  the live edge; Roku's own trickplay pauses/seeks anywhere back to when you tuned in.
+  Re-tuning the same channel rejoins the running buffer instantly. The buffer is stopped
+  `timeshift_idle_seconds` (120) after the last viewer heartbeat/playlist fetch and deleted
+  `timeshift_keep_hours` (2) after it ends, unless you chose **Keep recording**, which turns it
+  into a normal recording that runs to the end of the show.
+* **Live (other players)**: `/live/<id>/index.m3u8` (VLC, Kodi – see `/playlist.m3u`) is a plain
+  low-latency sliding-window HLS proxy, stopped ~30 s after the last segment request.
 * **DVR**: a scheduler thread checks every 10 s; due schedules launch `ffmpeg -c copy` writing an
   *event* HLS playlist (playable while still recording) with 1 min pre-pad / 3 min post-pad.
   Finished recordings are marked VOD and listed at `/api/recordings`.
@@ -139,7 +148,11 @@ Starring is stored on the Pi, so favorites set on the Roku also show first in th
 | GET/POST | `/api/schedules` | list / create (`{channel_id, program_start}` or `{channel_id, minutes}` or `{channel_id,start,stop,title}`) |
 | DELETE | `/api/schedules/<id>` | cancel |
 | DELETE | `/api/schedules/by-program?channel_id=&start=` | cancel by program |
-| GET | `/api/recordings` | list with `stream_url` |
+| GET | `/api/recordings` | list with `stream_url` and `duration` |
+| POST | `/api/timeshift` | `{channel_id}` → start/rejoin the live buffer for a channel (`recording_id`, `stream_url`) |
+| GET | `/api/timeshift/<id>/ready` | `ready`, `segments`, `status` – poll until `ready` before playing |
+| POST | `/api/timeshift/<id>/touch` | viewer heartbeat |
+| POST | `/api/timeshift/<id>/keep` | keep the buffer as a normal recording |
 | DELETE | `/api/recordings/<id>` | delete files |
 | GET/POST | `/api/config` | read / update settings |
 | POST | `/api/refresh` | re-import playlist + EPG now |

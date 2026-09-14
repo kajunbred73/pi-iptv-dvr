@@ -113,12 +113,12 @@ function fmtDuration(t as Dynamic) as String
     if t = invalid then return ""
     t = Int(t)
     h = Int(t / 3600)
-    m = Int((t mod 3600) / 60)
+    mins = Int((t mod 3600) / 60)
     s = t mod 60
     if h > 0
-        return h.toStr() + ":" + pad2(m) + ":" + pad2(s)
+        return h.toStr() + ":" + pad2(mins) + ":" + pad2(s)
     else
-        return m.toStr() + ":" + pad2(s)
+        return mins.toStr() + ":" + pad2(s)
     end if
 end function
 
@@ -625,6 +625,7 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.video.content = c
     m.video.loop = false
     m.video.visible = true
+    m.video.setFocus(true)
     m.video.control = "play"
 end sub
 
@@ -683,7 +684,7 @@ sub playChannel(ch as Object)
     m.pendingChannel = ch
     m.recordingId = -1
     m.playTitle = ch.name
-    showLoading("Starting live buffer...")
+    showLoading("Tuning...")
     api("/timeshift", "timeshift", "POST", FormatJson({ channel_id: ch.id }))
 end sub
 
@@ -692,8 +693,13 @@ sub trickMenu()
     d = CreateObject("roSGNode", "Dialog")
     d.title = m.playTitle
     d.message = "OK: select   Back: close"
-    buttons = ["Pause", "Play", "Rewind", "Keep recording"]
-    actions = ["pause", "play", "rewind", "keep"]
+    if m.video.state = "paused"
+        buttons = ["Play", "Back 30s", "Forward 30s", "Jump to live", "Keep recording"]
+        actions = ["play", "back30", "fwd30", "live", "keep"]
+    else
+        buttons = ["Pause", "Back 30s", "Forward 30s", "Jump to live", "Keep recording"]
+        actions = ["pause", "back30", "fwd30", "live", "keep"]
+    end if
     d.buttons = buttons
     d.addField("actions", "array", false)
     d.addField("recordingId", "integer", false)
@@ -714,8 +720,15 @@ sub onTrickMenu(ev as Object)
         m.video.control = "pause"
     else if action = "play"
         m.video.control = "resume"
-    else if action = "rewind"
-        m.video.seek = 0
+    else if action = "back30"
+        p = m.video.position - 30
+        if p < 0 then p = 0
+        m.video.seek = p
+    else if action = "fwd30"
+        m.video.seek = m.video.position + 30
+    else if action = "live"
+        ' Reloading the live playlist puts the player back at the live edge.
+        m.video.control = "play"
     else if action = "keep"
         if d.recordingId > 0
             api("/timeshift/" + d.recordingId.toStr() + "/keep", "keep", "POST", "")
@@ -761,7 +774,7 @@ sub onVideoState()
         m.retryCount = 0
         m.retrying = false
     else if st = "error"
-        if m.recordingId >= 0 and m.isLive and m.retryCount < 15 and not m.retrying
+        if m.recordingId >= 0 and m.isLive and m.retryCount < 5 and not m.retrying
             m.retrying = true
             m.retryCount = m.retryCount + 1
             m.retryTimer.control = "start"
@@ -770,14 +783,25 @@ sub onVideoState()
             toast("Playback error: " + txt(m.video.errorMsg) + " (code " + txt(m.video.errorCode) + ")")
         end if
     else if st = "finished"
-        stopVideo(true)
+        ' A live buffer only really ends when the Pi writes ENDLIST; if the player ran off the
+        ' end of the growing playlist, rejoin at the live edge instead of stopping/looping.
+        if m.recordingId >= 0 and m.isLive and m.retryCount < 5 and not m.retrying
+            m.retrying = true
+            m.retryCount = m.retryCount + 1
+            m.retryTimer.control = "start"
+        else
+            stopVideo(true)
+        end if
     end if
 end sub
 
 sub onRetry()
     m.retrying = false
     if m.video.visible and m.recordingId >= 0
-        m.video.control = "play"
+        ' Ask the Pi whether the buffer is still being written before rejoining.
+        m.readyAttempts = 0
+        m.streamUrl = m.video.content.url
+        api("/timeshift/" + m.recordingId.toStr() + "/ready", "rejoin")
     end if
 end sub
 
@@ -790,14 +814,21 @@ end sub
 ' ------------------------------------------------------------------ API responses
 
 sub loadStatus()
-    if m.server <> "" then api("/status", "status")
+    if m.server = "" then return
+    api("/status", "status")
+    ' Heartbeat so the Pi keeps the live buffer running while we watch (or sit paused).
+    if m.video.visible and m.isLive and m.recordingId >= 0
+        api("/timeshift/" + m.recordingId.toStr() + "/touch", "touch", "POST", "")
+    end if
 end sub
 
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
-    if t.tag = "timeshift" or t.tag = "keep" or t.tag = "readycheck"
+    if t.tag = "touch" then return
+    if t.tag = "timeshift" or t.tag = "keep" or t.tag = "readycheck" or t.tag = "rejoin"
         m.readyTimer.control = "stop"
         hideLoading()
+        if t.tag = "rejoin" then stopVideo()
     end if
     if t.tag = "status"
         m.status.text = "Cannot reach " + m.server
@@ -828,20 +859,31 @@ sub onApiResponse(ev as Object)
     else if tag = "readycheck"
         if r.ready = true or r.ready = 1
             m.readyTimer.control = "stop"
-            saved = readResumePos(m.recordingId)
-            if saved > 5
-                showResumeDialog(m.streamUrl, m.playTitle, true, saved, m.recordingId)
-            else
-                play(m.streamUrl, m.playTitle, true)
-            end if
+            play(m.streamUrl, m.playTitle, true)
+        else if txt(r.status) <> "recording"
+            m.readyTimer.control = "stop"
+            hideLoading()
+            toast("The Pi could not open this channel's stream (check the provider URL / ffmpeg.log)")
         else
             m.readyAttempts = m.readyAttempts + 1
+            if m.top.dialog <> invalid and m.top.dialog.loading = true
+                m.top.dialog.title = "Buffering live TV... " + txt(r.segments) + "/3"
+            end if
             if m.readyAttempts > 60
                 m.readyTimer.control = "stop"
                 hideLoading()
                 toast("Recording did not start on the Pi")
             end if
         end if
+    else if tag = "rejoin"
+        if not m.video.visible then return
+        if txt(r.status) = "recording" or (r.ready = true)
+            m.video.control = "play"
+        else
+            stopVideo(true)
+        end if
+    else if tag = "touch"
+        ' heartbeat; nothing to do
     else if tag = "keep"
         if r.ok = true or r.ok = 1
             toast("Recording saved")

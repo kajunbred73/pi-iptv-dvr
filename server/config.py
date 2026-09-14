@@ -21,6 +21,9 @@ DEFAULTS = {
     "hls_segment_seconds": 4,
     "hls_list_size": 6,
     "live_idle_seconds": 30,
+    "timeshift_idle_seconds": 120,   # stop a live buffer nobody has touched for this long
+    "timeshift_keep_hours": 2,       # delete un-kept live buffers this long after they end
+    "timeshift_min_segments": 3,     # segments needed before the Roku starts playing
 }
 
 _lock = threading.Lock()
