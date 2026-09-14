@@ -19,6 +19,8 @@
     <Label id="hint" translation="[60,960]" width="340" height="80" wrap="true" font="font:SmallestSystemFont" color="#66707A" />
 
     <Video id="video" width="1920" height="1080" visible="false" enableUI="true" enableTrickPlay="true" seekMode="accurate" />
+    <BusySpinner id="spinner" visible="false" translation="[896,476]" />
+    <Timer id="retryTimer" repeat="false" duration="3" />
     <Timer id="statusTimer" repeat="true" duration="30" />
   </children>
 </component>

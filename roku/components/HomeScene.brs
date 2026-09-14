@@ -10,6 +10,12 @@ sub init()
     m.hint = m.top.findNode("hint")
     m.status = m.top.findNode("status")
     m.video = m.top.findNode("video")
+    m.spinner = m.top.findNode("spinner")
+    m.spinner.poster.uri = "pkg:/images/icon_hd.png"
+    m.spinner.poster.width = 128
+    m.spinner.poster.height = 128
+    m.retryTimer = m.top.findNode("retryTimer")
+    m.retryTimer.observeField("fire", "onRetry")
     m.statusTimer = m.top.findNode("statusTimer")
 
     m.tabs = ["Favorites", "Guide", "Search", "Categories", "Recordings", "Scheduled", "Settings"]
@@ -35,6 +41,7 @@ sub init()
     m.tasks = {}
     m.recordingId = -1
     m.playTitle = ""
+    m.retryCount = 0
 
     m.reg = CreateObject("roRegistrySection", "piiptv")
     m.server = ""
@@ -557,6 +564,8 @@ end sub
 
 sub play(url as String, title as String, isLive as Boolean)
     m.playTitle = title
+    m.retryCount = 0
+    showSpinner()
     c = CreateObject("roSGNode", "ContentNode")
     c.url = url
     c.title = title
@@ -568,8 +577,20 @@ sub play(url as String, title as String, isLive as Boolean)
     m.video.control = "play"
 end sub
 
+sub showSpinner()
+    m.spinner.visible = true
+    m.spinner.control = "start"
+end sub
+
+sub hideSpinner()
+    m.spinner.visible = false
+    m.spinner.control = "stop"
+end sub
+
 sub playChannel(ch as Object)
     m.pendingChannel = ch
+    m.recordingId = -1
+    showSpinner()
     toast("Starting live buffer...")
     api("/timeshift", "timeshift", "POST", FormatJson({ channel_id: ch.id }))
 end sub
@@ -615,16 +636,33 @@ sub stopVideo()
     m.video.control = "stop"
     m.video.visible = false
     m.recordingId = -1
+    hideSpinner()
+    m.retryTimer.control = "stop"
     focusPane()
 end sub
 
 sub onVideoState()
     st = m.video.state
-    if st = "error"
-        stopVideo()
-        toast("Playback error: " + txt(m.video.errorMsg) + " (code " + txt(m.video.errorCode) + ")")
+    if st = "playing"
+        hideSpinner()
+        m.retryCount = 0
+    else if st = "error"
+        if m.recordingId >= 0 and m.retryCount < 5
+            m.retryCount = m.retryCount + 1
+            showSpinner()
+            m.retryTimer.control = "start"
+        else
+            stopVideo()
+            toast("Playback error: " + txt(m.video.errorMsg) + " (code " + txt(m.video.errorCode) + ")")
+        end if
     else if st = "finished"
         stopVideo()
+    end if
+end sub
+
+sub onRetry()
+    if m.video.visible and m.recordingId >= 0
+        m.video.control = "play"
     end if
 end sub
 
@@ -656,6 +694,7 @@ sub onApiResponse(ev as Object)
             m.recordingId = r.recording_id
             play(r.stream_url, txt(m.pendingChannel.name), false)
         else
+            hideSpinner()
             toast("Could not start timeshift: " + txt(r.error))
         end if
     else if tag = "keep"
