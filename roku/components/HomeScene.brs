@@ -604,7 +604,7 @@ end sub
 
 ' ------------------------------------------------------------------ playback
 
-sub play(url as String, title as String, isLive as Boolean, startPos = 0.0 as Float)
+sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.playTitle = title
     m.isLive = isLive
     m.retryCount = 0
@@ -647,16 +647,16 @@ sub hideLoading()
     end if
 end sub
 
-sub showResumeDialog(url as String, title as String, isLive as Boolean, pos as Float, recordingId as Integer)
+sub showResumeDialog(url as String, title as String, isLive as Boolean, resumeFrom as Float, recordingId as Integer)
     m.resumeUrl = url
     m.resumeTitle = title
     m.resumeLive = isLive
-    m.resumePos = pos
+    m.resumePos = resumeFrom
     m.resumeRecordingId = recordingId
     hideLoading()
     d = CreateObject("roSGNode", "Dialog")
     d.title = "Resume viewing?"
-    d.message = "Resume from " + fmtDuration(pos) + " or start over?"
+    d.message = "Resume from " + fmtDuration(resumeFrom) + " or start over?"
     d.buttons = ["Resume", "Start over"]
     d.addField("resume", "boolean", false)
     d.resume = true
@@ -722,16 +722,16 @@ sub onTrickMenu(ev as Object)
     m.video.setFocus(true)
 end sub
 
-sub stopVideo(clearResume = false as Boolean)
+sub stopVideo(clearResume = false)
     if m.recordingId >= 0
         if clearResume
             m.reg.delete("pos_" + m.recordingId.toStr())
             m.reg.flush()
         else
-            pos = m.video.position
-            dur = m.video.duration
-            if pos > 5 and (dur <= 0 or pos < dur - 15)
-                m.reg.write("pos_" + m.recordingId.toStr(), pos.toStr())
+            lastPos = m.video.position
+            totalDur = m.video.duration
+            if lastPos > 5 and (totalDur <= 0 or lastPos < totalDur - 15)
+                m.reg.write("pos_" + m.recordingId.toStr(), lastPos.toStr())
                 m.reg.flush()
             end if
         end if
