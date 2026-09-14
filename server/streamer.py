@@ -166,24 +166,29 @@ class Recorder:
         # Live buffers nobody is watching any more: stop them so they don't fill the SD card.
         idle = config.get("timeshift_idle_seconds")
         with self.lock:
-            stale = [rid for rid, t in self.timeshift.items()
+            stale = [(rid, t["sid"]) for rid, t in self.timeshift.items()
                      if not t["keep"] and now - t["touch"] > idle]
-        for rid in stale:
+            active = list(self.active.items())
+        for rid, sid in stale:
             log.info("timeshift idle, stopping rec=%s", rid)
-            self.cancel(self.timeshift[rid]["sid"])
-        with self.lock:
-            for sid, (proc, rid) in list(self.active.items()):
-                sched = db.row("SELECT * FROM schedules WHERE id=?", (sid,))
-                expired = sched is None or now >= sched["stop"] + post or sched["status"] == "cancelled"
-                if expired and proc.poll() is None:
-                    proc.terminate()
-                if proc.poll() is not None or expired:
-                    try:
-                        proc.wait(10)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+            self.cancel(sid)
+        # Never wait on ffmpeg while holding the lock: API requests (touch/ready/playlist)
+        # need it and would stall for the whole shutdown.
+        for sid, (proc, rid) in active:
+            sched = db.row("SELECT * FROM schedules WHERE id=?", (sid,))
+            expired = sched is None or now >= sched["stop"] + post or sched["status"] == "cancelled"
+            if expired and proc.poll() is None:
+                proc.terminate()
+            if proc.poll() is not None or expired:
+                try:
+                    proc.wait(10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                with self.lock:
+                    owned = self.active.pop(sid, None) is not None
+                if owned:
                     self._finish(sid, rid, proc.returncode)
-                    del self.active[sid]
 
     def _start(self, sched, now, post, timeshift=False):
         ch = db.row("SELECT * FROM channels WHERE id=?", (sched["channel_id"],))
@@ -273,6 +278,30 @@ class Recorder:
             if t:
                 t["touch"] = int(time.time())
             return t is not None
+
+    def stop_other_timeshifts(self):
+        """Stop every un-kept live buffer now (viewer changed channel); finish them off-thread."""
+        with self.lock:
+            victims = [(rid, t["sid"]) for rid, t in self.timeshift.items() if not t["keep"]]
+            entries = [(sid, self.active.pop(sid, None), rid) for rid, sid in victims]
+            for rid, _ in victims:
+                self.timeshift.pop(rid, None)
+        for sid, entry, rid in entries:
+            db.execute("UPDATE schedules SET status='cancelled' WHERE id=? AND status IN ('scheduled','recording')", (sid,))
+            if entry is None:
+                continue
+            proc = entry[0]
+            if proc.poll() is None:
+                proc.terminate()
+
+            def _reap(p=proc, s=sid, r=rid):
+                try:
+                    p.wait(10)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait()
+                self._finish(s, r, p.returncode)
+            threading.Thread(target=_reap, daemon=True).start()
 
     def keep_timeshift(self, rid):
         with self.lock:
