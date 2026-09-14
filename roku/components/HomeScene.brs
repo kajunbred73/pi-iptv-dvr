@@ -11,9 +11,6 @@ sub init()
     m.status = m.top.findNode("status")
     m.video = m.top.findNode("video")
     m.spinner = m.top.findNode("spinner")
-    m.spinner.poster.uri = "pkg:/images/icon_hd.png"
-    m.spinner.poster.width = 128
-    m.spinner.poster.height = 128
     m.retryTimer = m.top.findNode("retryTimer")
     m.retryTimer.observeField("fire", "onRetry")
     m.statusTimer = m.top.findNode("statusTimer")
@@ -42,6 +39,7 @@ sub init()
     m.recordingId = -1
     m.playTitle = ""
     m.retryCount = 0
+    m.retrying = false
 
     m.reg = CreateObject("roRegistrySection", "piiptv")
     m.server = ""
@@ -565,6 +563,7 @@ end sub
 sub play(url as String, title as String, isLive as Boolean)
     m.playTitle = title
     m.retryCount = 0
+    m.retrying = false
     showSpinner()
     c = CreateObject("roSGNode", "ContentNode")
     c.url = url
@@ -636,6 +635,7 @@ sub stopVideo()
     m.video.control = "stop"
     m.video.visible = false
     m.recordingId = -1
+    m.retrying = false
     hideSpinner()
     m.retryTimer.control = "stop"
     focusPane()
@@ -646,8 +646,10 @@ sub onVideoState()
     if st = "playing"
         hideSpinner()
         m.retryCount = 0
+        m.retrying = false
     else if st = "error"
-        if m.recordingId >= 0 and m.retryCount < 5
+        if m.recordingId >= 0 and m.retryCount < 15 and not m.retrying
+            m.retrying = true
             m.retryCount = m.retryCount + 1
             showSpinner()
             m.retryTimer.control = "start"
@@ -661,6 +663,7 @@ sub onVideoState()
 end sub
 
 sub onRetry()
+    m.retrying = false
     if m.video.visible and m.recordingId >= 0
         m.video.control = "play"
     end if
