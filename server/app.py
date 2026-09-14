@@ -222,6 +222,40 @@ def api_schedule_create():
     return jsonify({"ok": True, "id": sid})
 
 
+@app.post("/api/timeshift")
+def api_timeshift():
+    """Start a live buffer recording for the current show on a channel."""
+    body = request.get_json(force=True, silent=True) or request.form.to_dict()
+    cid = int(body["channel_id"])
+    ch = db.row("SELECT * FROM channels WHERE id=?", (cid,)) or abort(404)
+    now = _now()
+    cur, _ = _now_next(ch["tvg_id"], now)
+    if cur:
+        start, stop, title = now, int(cur["stop"]), (cur.get("title") or ch["name"])
+    else:
+        start, stop, title = now, now + 4 * 3600, ch["name"]
+    rid = streamer.recorder.start_now(cid, start, stop, title)
+    return jsonify({
+        "ok": True,
+        "recording_id": rid,
+        "stream_url": f"{_base_url()}/recordings/{rid}/index.m3u8",
+        "title": title,
+        "stop": stop,
+    })
+
+
+@app.post("/api/timeshift/<int:rid>/keep")
+def api_timeshift_keep(rid):
+    """Mark a timeshift recording as a keep (do not auto-delete in 24h)."""
+    rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,)) or abort(404)
+    new_title = rec["title"]
+    if new_title.startswith("[timeshift] "):
+        new_title = new_title[12:]
+    db.execute("UPDATE recordings SET title=? WHERE id=?", (new_title, rid))
+    db.execute("UPDATE schedules SET title=? WHERE recording_id=?", (new_title, rid))
+    return jsonify({"ok": True})
+
+
 @app.delete("/api/schedules/by-program")
 def api_schedule_delete_by_program():
     """Cancel the schedule for ?channel_id=&start= (used by the guide grid)."""

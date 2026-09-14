@@ -149,6 +149,7 @@ class Recorder:
         while True:
             try:
                 self._tick()
+                self._reap_timeshift()
             except Exception:
                 log.exception("recorder tick failed")
             time.sleep(10)
@@ -206,6 +207,7 @@ class Recorder:
         with self.lock:
             self.active[sched["id"]] = (proc, rid)
         db.execute("UPDATE schedules SET status='recording', recording_id=? WHERE id=?", (rid, sched["id"]))
+        return rid
 
     def _finish(self, sid, rid, rc):
         rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,))
@@ -230,6 +232,22 @@ class Recorder:
             entry = self.active.get(sid)
         if entry and entry[0].poll() is None:
             entry[0].terminate()
+
+    def start_now(self, cid, start, stop, title="Timeshift"):
+        """Create and immediately start a recording for the current show."""
+        now = int(time.time())
+        sid = db.execute(
+            "INSERT INTO schedules(channel_id,title,start,stop,status,created) VALUES(?,?,?,?,'scheduled',?)",
+            (cid, f"[timeshift] {title}", start, stop, now))
+        sched = db.row("SELECT * FROM schedules WHERE id=?", (sid,))
+        return self._start(sched, now, 0)
+
+    def _reap_timeshift(self):
+        """Delete timeshift recordings older than 24 hours that were not kept."""
+        cutoff = int(time.time()) - 24 * 3600
+        for r in db.rows("SELECT * FROM recordings WHERE status='done' AND title LIKE '[timeshift] %' AND stop < ?",
+                         (cutoff,)):
+            delete_recording(r["id"])
 
 
 recorder = Recorder()

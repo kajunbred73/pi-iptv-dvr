@@ -33,6 +33,8 @@ sub init()
     m.gridFrom = 0        ' 0 = now
     m.lastQuery = ""
     m.tasks = {}
+    m.recordingId = -1
+    m.playTitle = ""
 
     m.reg = CreateObject("roRegistrySection", "piiptv")
     m.server = ""
@@ -267,6 +269,7 @@ sub onContentSelected()
         openGrid("group=" + urlEnc(it.name), txt(it.name), txt(it.count) + " channels in this category")
         m.grid.setFocus(true)
     else if m.mode = "recordings"
+        m.recordingId = -1
         play(it.stream_url, it.title, false)
     else if m.mode = "scheduled"
         confirm("Cancel recording '" + txt(it.title) + "'?", "cancel", { id: it.id })
@@ -402,7 +405,7 @@ sub onChannelMenu(ev as Object)
     ch = d.channel
     prog = d.program
     if action = "watch"
-        play(ch.stream_url, ch.name, true)
+        playChannel(ch)
     else if action = "record"
         api("/schedules", "scheduled_ok", "POST", FormatJson({ channel_id: ch.id, program_start: prog.start }))
     else if action = "record60"
@@ -418,7 +421,16 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     if not press then return false
     if m.video.visible
         if key = "back"
+            if m.top.dialog <> invalid
+                m.top.dialog.close = true
+                m.top.dialog = invalid
+                m.video.setFocus(true)
+                return true
+            end if
             stopVideo()
+            return true
+        else if key = "down"
+            if m.top.dialog = invalid then trickMenu()
             return true
         end if
         return false
@@ -544,6 +556,7 @@ end sub
 ' ------------------------------------------------------------------ playback
 
 sub play(url as String, title as String, isLive as Boolean)
+    m.playTitle = title
     c = CreateObject("roSGNode", "ContentNode")
     c.url = url
     c.title = title
@@ -555,9 +568,53 @@ sub play(url as String, title as String, isLive as Boolean)
     m.video.control = "play"
 end sub
 
+sub playChannel(ch as Object)
+    m.pendingChannel = ch
+    toast("Starting live buffer...")
+    api("/timeshift", "timeshift", "POST", FormatJson({ channel_id: ch.id }))
+end sub
+
+sub trickMenu()
+    if m.recordingId < 0 then return
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = m.playTitle
+    d.message = "OK: select   Back: close"
+    buttons = ["Pause", "Play", "Rewind", "Keep recording"]
+    actions = ["pause", "play", "rewind", "keep"]
+    d.buttons = buttons
+    d.addField("actions", "array", false)
+    d.addField("recordingId", "integer", false)
+    d.actions = actions
+    d.recordingId = m.recordingId
+    d.observeField("buttonSelected", "onTrickMenu")
+    m.top.dialog = d
+    d.setFocus(true)
+end sub
+
+sub onTrickMenu(ev as Object)
+    d = ev.getRoSGNode()
+    d.close = true
+    idx = ev.getData()
+    if idx < 0 or idx >= d.actions.count() then return
+    action = d.actions[idx]
+    if action = "pause"
+        m.video.control = "pause"
+    else if action = "play"
+        m.video.control = "resume"
+    else if action = "rewind"
+        m.video.seek = 0
+    else if action = "keep"
+        if d.recordingId > 0
+            api("/timeshift/" + d.recordingId.toStr() + "/keep", "keep", "POST", "")
+        end if
+    end if
+    m.video.setFocus(true)
+end sub
+
 sub stopVideo()
     m.video.control = "stop"
     m.video.visible = false
+    m.recordingId = -1
     focusPane()
 end sub
 
@@ -594,6 +651,19 @@ sub onApiResponse(ev as Object)
     tag = r.tag
     if tag = "status"
         m.status.text = txt(r.channels) + " channels  |  " + txt(r.recordings) + " recordings  |  " + m.server
+    else if tag = "timeshift"
+        if r.ok = true or r.ok = 1
+            m.recordingId = r.recording_id
+            play(r.stream_url, txt(m.pendingChannel.name), false)
+        else
+            toast("Could not start timeshift: " + txt(r.error))
+        end if
+    else if tag = "keep"
+        if r.ok = true or r.ok = 1
+            toast("Recording saved")
+        else
+            toast("Could not save recording")
+        end if
     else if tag = "guide"
         if m.mode <> "grid" then return
         m.grid.data = r
