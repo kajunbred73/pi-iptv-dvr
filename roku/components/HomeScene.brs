@@ -10,7 +10,6 @@ sub init()
     m.hint = m.top.findNode("hint")
     m.status = m.top.findNode("status")
     m.video = m.top.findNode("video")
-    m.spinner = m.top.findNode("spinner")
     m.retryTimer = m.top.findNode("retryTimer")
     m.retryTimer.observeField("fire", "onRetry")
     m.statusTimer = m.top.findNode("statusTimer")
@@ -427,9 +426,13 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     if m.video.visible
         if key = "back"
             if m.top.dialog <> invalid
-                m.top.dialog.close = true
-                m.top.dialog = invalid
-                m.video.setFocus(true)
+                if m.top.dialog.loading = true
+                    stopVideo()
+                else
+                    m.top.dialog.close = true
+                    m.top.dialog = invalid
+                    m.video.setFocus(true)
+                end if
                 return true
             end if
             stopVideo()
@@ -564,7 +567,7 @@ sub play(url as String, title as String, isLive as Boolean)
     m.playTitle = title
     m.retryCount = 0
     m.retrying = false
-    showSpinner()
+    showLoading("Buffering...")
     c = CreateObject("roSGNode", "ContentNode")
     c.url = url
     c.title = title
@@ -572,25 +575,35 @@ sub play(url as String, title as String, isLive as Boolean)
     c.live = isLive
     m.video.content = c
     m.video.visible = true
-    m.video.setFocus(true)
     m.video.control = "play"
 end sub
 
-sub showSpinner()
-    m.spinner.visible = true
-    m.spinner.control = "start"
+sub showLoading(msg as String)
+    if m.top.dialog <> invalid
+        m.top.dialog.close = true
+        m.top.dialog = invalid
+    end if
+    d = CreateObject("roSGNode", "ProgressDialog")
+    d.title = msg
+    d.message = m.playTitle
+    d.addField("loading", "boolean", false)
+    d.loading = true
+    m.top.dialog = d
+    d.setFocus(true)
 end sub
 
-sub hideSpinner()
-    m.spinner.visible = false
-    m.spinner.control = "stop"
+sub hideLoading()
+    if m.top.dialog <> invalid
+        m.top.dialog.close = true
+        m.top.dialog = invalid
+    end if
 end sub
 
 sub playChannel(ch as Object)
     m.pendingChannel = ch
     m.recordingId = -1
-    showSpinner()
-    toast("Starting live buffer...")
+    m.playTitle = ch.name
+    showLoading("Starting live buffer...")
     api("/timeshift", "timeshift", "POST", FormatJson({ channel_id: ch.id }))
 end sub
 
@@ -632,11 +645,11 @@ sub onTrickMenu(ev as Object)
 end sub
 
 sub stopVideo()
+    hideLoading()
     m.video.control = "stop"
     m.video.visible = false
     m.recordingId = -1
     m.retrying = false
-    hideSpinner()
     m.retryTimer.control = "stop"
     focusPane()
 end sub
@@ -644,14 +657,14 @@ end sub
 sub onVideoState()
     st = m.video.state
     if st = "playing"
-        hideSpinner()
+        hideLoading()
+        m.video.setFocus(true)
         m.retryCount = 0
         m.retrying = false
     else if st = "error"
         if m.recordingId >= 0 and m.retryCount < 15 and not m.retrying
             m.retrying = true
             m.retryCount = m.retryCount + 1
-            showSpinner()
             m.retryTimer.control = "start"
         else
             stopVideo()
@@ -677,7 +690,7 @@ end sub
 
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
-    if t.tag = "timeshift" or t.tag = "keep" then hideSpinner()
+    if t.tag = "timeshift" or t.tag = "keep" then hideLoading()
     if t.tag = "status"
         m.status.text = "Cannot reach " + m.server
     else
@@ -698,7 +711,7 @@ sub onApiResponse(ev as Object)
             m.recordingId = r.recording_id
             play(r.stream_url, txt(m.pendingChannel.name), false)
         else
-            hideSpinner()
+            hideLoading()
             toast("Could not start timeshift: " + txt(r.error))
         end if
     else if tag = "keep"
