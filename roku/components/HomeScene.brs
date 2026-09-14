@@ -567,7 +567,11 @@ sub play(url as String, title as String, isLive as Boolean)
     m.playTitle = title
     m.retryCount = 0
     m.retrying = false
-    showLoading("Buffering...")
+    if m.top.dialog <> invalid and m.top.dialog.loading = true
+        ' keep the existing loading dialog
+    else
+        showLoading("Buffering...")
+    end if
     c = CreateObject("roSGNode", "ContentNode")
     c.url = url
     c.title = title
