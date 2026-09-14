@@ -619,7 +619,9 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     c.title = title
     c.streamFormat = "hls"
     c.live = isLive
-    c.playStart = startPos
+    if not isLive
+        c.playStart = startPos
+    end if
     m.video.content = c
     m.video.loop = false
     m.video.visible = true
