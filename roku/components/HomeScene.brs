@@ -677,6 +677,7 @@ end sub
 
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
+    if t.tag = "timeshift" or t.tag = "keep" then hideSpinner()
     if t.tag = "status"
         m.status.text = "Cannot reach " + m.server
     else

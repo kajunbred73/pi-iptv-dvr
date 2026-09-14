@@ -234,6 +234,25 @@ def api_timeshift():
         start, stop, title = now, int(cur["stop"]), (cur.get("title") or ch["name"])
     else:
         start, stop, title = now, now + 4 * 3600, ch["name"]
+
+    # Reuse an existing timeshift for the same channel + show if already recording
+    if cur:
+        existing = db.row("SELECT recording_id FROM schedules WHERE channel_id=? AND stop=? AND title LIKE '[timeshift] %' AND status='recording'", (cid, stop))
+    else:
+        existing = db.row("SELECT recording_id FROM schedules WHERE channel_id=? AND title LIKE '[timeshift] %' AND status='recording' ORDER BY start DESC LIMIT 1", (cid,))
+    if existing:
+        rid = existing["recording_id"]
+        return jsonify({
+            "ok": True,
+            "recording_id": rid,
+            "stream_url": f"{_base_url()}/recordings/{rid}/index.m3u8",
+            "title": title,
+            "stop": stop,
+        })
+
+    if len(streamer.recorder.active) >= 4:
+        return jsonify({"ok": False, "error": "Too many recordings in progress"}), 503
+
     rid = streamer.recorder.start_now(cid, start, stop, title)
     return jsonify({
         "ok": True,
