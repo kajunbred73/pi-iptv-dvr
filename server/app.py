@@ -283,6 +283,7 @@ def api_timeshift_ready(rid):
         "ready": segs >= config.get("timeshift_min_segments") or (ended and segs > 0),
         "segments": segs,
         "status": rec["status"],
+        "error": streamer.recorder.last_error(rid) if rec["status"] != "recording" else "",
         "stream_url": f"{_base_url()}/recordings/{rid}/index.m3u8",
     })
 

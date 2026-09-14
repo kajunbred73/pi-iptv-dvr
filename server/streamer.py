@@ -209,7 +209,6 @@ class Recorder:
         cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args() + [
             "-t", str(duration),
             "-f", "hls", "-hls_time", seg, "-hls_list_size", "0",
-            "-hls_flags", "independent_segments",
             "-hls_playlist_type", "event",
             "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
             playlist,
@@ -287,6 +286,18 @@ class Recorder:
         for r in db.rows("SELECT * FROM recordings WHERE status IN ('done','failed') "
                          "AND title LIKE '[timeshift] %' AND stop < ?", (cutoff,)):
             delete_recording(r["id"])
+
+    def last_error(self, rid):
+        """Last non-empty line of the recording's ffmpeg.log (why it failed), or ''."""
+        rec = db.row("SELECT path FROM recordings WHERE id=?", (rid,))
+        if not rec:
+            return ""
+        try:
+            with open(os.path.join(config.get("recordings_dir"), rec["path"], "ffmpeg.log"), errors="replace") as f:
+                lines = [l.strip() for l in f.read()[-4000:].splitlines() if l.strip()]
+        except OSError:
+            return ""
+        return lines[-1] if lines else ""
 
     def segments(self, rid):
         """(segment count, playlist finished?) for a recording's HLS playlist."""

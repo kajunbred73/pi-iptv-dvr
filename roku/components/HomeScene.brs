@@ -14,6 +14,8 @@ sub init()
     m.readyTimer.observeField("fire", "onReadyCheck")
     m.retryTimer = m.top.findNode("retryTimer")
     m.retryTimer.observeField("fire", "onRetry")
+    m.playTimer = m.top.findNode("playTimer")
+    m.playTimer.observeField("fire", "onPlayTimeout")
     m.statusTimer = m.top.findNode("statusTimer")
 
     m.tabs = ["Favorites", "Guide", "Search", "Categories", "Recordings", "Scheduled", "Settings"]
@@ -608,6 +610,7 @@ end sub
 
 sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.playTitle = title
+    m.streamUrl = url
     m.isLive = isLive
     m.startPos = startPos
     m.retryCount = 0
@@ -627,6 +630,33 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.video.visible = true
     m.video.setFocus(true)
     m.video.control = "play"
+    m.playTimer.control = "start"
+end sub
+
+' Something went wrong starting/playing video: stop and tell the user why (a toast is hidden
+' behind the loading box, so use a real dialog).
+sub playError(msg as String)
+    stopVideo()
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = "Can't play"
+    d.message = msg
+    d.buttons = ["OK"]
+    d.observeField("buttonSelected", "onErrorDialog")
+    m.top.dialog = d
+    d.setFocus(true)
+end sub
+
+sub onErrorDialog(ev as Object)
+    d = ev.getRoSGNode()
+    d.close = true
+    m.top.dialog = invalid
+    focusPane()
+end sub
+
+sub onPlayTimeout()
+    if m.video.visible and m.video.state <> "playing" and m.video.state <> "paused"
+        playError("The stream did not start within 30 seconds (player state: " + m.video.state + "). " + Chr(10) + "Check that the Pi service is running: sudo systemctl status pi-iptv-dvr")
+    end if
 end sub
 
 sub showLoading(msg as String)
@@ -753,6 +783,7 @@ sub stopVideo(clearResume = false)
     end if
     hideLoading()
     m.readyTimer.control = "stop"
+    m.playTimer.control = "stop"
     m.video.control = "stop"
     m.video.visible = false
     m.recordingId = -1
@@ -766,6 +797,7 @@ sub onVideoState()
     st = m.video.state
     if st = "playing"
         hideLoading()
+        m.playTimer.control = "stop"
         m.video.setFocus(true)
         if not m.isLive and m.startPos > 0
             m.video.seek = m.startPos
@@ -779,8 +811,7 @@ sub onVideoState()
             m.retryCount = m.retryCount + 1
             m.retryTimer.control = "start"
         else
-            stopVideo()
-            toast("Playback error: " + txt(m.video.errorMsg) + " (code " + txt(m.video.errorCode) + ")")
+            playError("Playback error: " + txt(m.video.errorMsg) + " (code " + txt(m.video.errorCode) + ")" + Chr(10) + m.streamUrl)
         end if
     else if st = "finished"
         ' A live buffer only really ends when the Pi writes ENDLIST; if the player ran off the
@@ -800,7 +831,6 @@ sub onRetry()
     if m.video.visible and m.recordingId >= 0
         ' Ask the Pi whether the buffer is still being written before rejoining.
         m.readyAttempts = 0
-        m.streamUrl = m.video.content.url
         api("/timeshift/" + m.recordingId.toStr() + "/ready", "rejoin")
     end if
 end sub
@@ -825,10 +855,10 @@ end sub
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
     if t.tag = "touch" then return
-    if t.tag = "timeshift" or t.tag = "keep" or t.tag = "readycheck" or t.tag = "rejoin"
+    if t.tag = "timeshift" or t.tag = "readycheck" or t.tag = "rejoin"
         m.readyTimer.control = "stop"
-        hideLoading()
-        if t.tag = "rejoin" then stopVideo()
+        playError("The Pi did not answer " + t.url + Chr(10) + t.error + Chr(10) + "If this says HTTP 404, the Pi is running old server code: cd pi-iptv-dvr && git pull && sudo systemctl restart pi-iptv-dvr")
+        return
     end if
     if t.tag = "status"
         m.status.text = "Cannot reach " + m.server
@@ -853,8 +883,7 @@ sub onApiResponse(ev as Object)
             m.readyAttempts = 0
             m.readyTimer.control = "start"
         else
-            hideLoading()
-            toast("Could not start timeshift: " + txt(r.error))
+            playError("Could not start the live buffer: " + txt(r.error))
         end if
     else if tag = "readycheck"
         if r.ready = true or r.ready = 1
@@ -862,8 +891,7 @@ sub onApiResponse(ev as Object)
             play(m.streamUrl, m.playTitle, true)
         else if txt(r.status) <> "recording"
             m.readyTimer.control = "stop"
-            hideLoading()
-            toast("The Pi could not open this channel's stream (check the provider URL / ffmpeg.log)")
+            playError("The Pi could not open this channel's stream. ffmpeg said:" + Chr(10) + txt(r.error))
         else
             m.readyAttempts = m.readyAttempts + 1
             if m.top.dialog <> invalid and m.top.dialog.loading = true
@@ -871,8 +899,7 @@ sub onApiResponse(ev as Object)
             end if
             if m.readyAttempts > 60
                 m.readyTimer.control = "stop"
-                hideLoading()
-                toast("Recording did not start on the Pi")
+                playError("The Pi is still not producing video after 60 s (" + txt(r.segments) + " segments). The provider stream may be down or too slow.")
             end if
         end if
     else if tag = "rejoin"

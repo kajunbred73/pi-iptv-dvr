@@ -21,6 +21,7 @@
     <Video id="video" width="1920" height="1080" visible="false" enableUI="true" />
     <Timer id="readyTimer" repeat="true" duration="1" />
     <Timer id="retryTimer" repeat="false" duration="3" />
+    <Timer id="playTimer" repeat="false" duration="30" />
     <Timer id="statusTimer" repeat="true" duration="30" />
   </children>
 </component>
