@@ -604,7 +604,7 @@ end sub
 
 ' ------------------------------------------------------------------ playback
 
-sub play(url as String, title as String, isLive as Boolean, startPos = 0 as Float)
+sub play(url as String, title as String, isLive as Boolean, startPos as Float = 0)
     m.playTitle = title
     m.isLive = isLive
     m.retryCount = 0
@@ -722,7 +722,7 @@ sub onTrickMenu(ev as Object)
     m.video.setFocus(true)
 end sub
 
-sub stopVideo(clearResume = false as Boolean)
+sub stopVideo(clearResume as Boolean = false)
     if m.recordingId >= 0
         if clearResume
             m.reg.delete("pos_" + m.recordingId.toStr())
