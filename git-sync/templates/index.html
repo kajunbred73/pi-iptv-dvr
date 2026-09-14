@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Git Sync - Pi IPTV DVR</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; background: #111; color: #eee; }
+    h1 { color: #4ade80; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    .card { background: #1f2937; border-radius: 8px; padding: 1rem; }
+    .card h2 { margin-top: 0; font-size: 1.1rem; color: #60a5fa; }
+    button { padding: 0.5rem 1rem; margin-right: 0.5rem; cursor: pointer; border: none; border-radius: 4px; background: #2563eb; color: #fff; }
+    button:hover { background: #1d4ed8; }
+    input, textarea { width: 100%; padding: 0.4rem; margin: 0.3rem 0; border: 1px solid #4b5563; border-radius: 4px; background: #111; color: #eee; }
+    table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+    th, td { padding: 0.3rem; border-bottom: 1px solid #374151; text-align: left; }
+    .mono { font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; }
+    .ok { color: #4ade80; }
+    .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>Git Sync</h1>
+  <p>Push code from this PC to GitHub/Git, then pull it on the Raspberry Pi.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Status: <span id="branch">-</span></h2>
+      <div id="files">Loading...</div>
+    </div>
+
+    <div class="card">
+      <h2>Commit &amp; Push</h2>
+      <textarea id="message" rows="3" placeholder="Describe the changes you want to commit"></textarea>
+      <button onclick="commit()">Commit all changes</button>
+      <button onclick="push()">Push to origin</button>
+      <div id="commitResult" class="mono"></div>
+    </div>
+
+    <div class="card">
+      <h2>Pull from origin</h2>
+      <p>Use this to pull the latest changes from Git onto this machine.</p>
+      <button onclick="pull()">Pull</button>
+      <div id="pullResult" class="mono"></div>
+    </div>
+
+    <div class="card">
+      <h2>Settings</h2>
+      <input id="remote" placeholder="Git remote URL (e.g. https://github.com/user/pi-iptv-dvr.git)">
+      <button onclick="setRemote()">Set origin remote</button>
+      <input id="name" placeholder="Your name">
+      <input id="email" placeholder="Your email">
+      <button onclick="setConfig()">Set git user</button>
+      <div id="settingsResult" class="mono"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:1.5rem;">
+    <h2>Recent commits</h2>
+    <div id="commits" class="mono">-</div>
+  </div>
+
+  <script>
+    async function load() {
+      const r = await fetch('/api/status');
+      const data = await r.json();
+      document.getElementById('branch').textContent = data.ok ? data.branch : data.error;
+
+      if (data.ok) {
+        const files = data.files.length
+          ? '<table><tr><th>Status</th><th>File</th></tr>' +
+            data.files.map(f => `<tr><td>${f.status}</td><td>${f.path}</td></tr>`).join('') +
+            '</table>'
+          : '<p class="ok">Working tree clean</p>';
+        document.getElementById('files').innerHTML = files;
+        document.getElementById('commits').textContent = data.commits.join('\n') || 'No commits yet';
+      }
+    }
+
+    async function post(url, body, outId) {
+      const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await r.json();
+      const el = document.getElementById(outId);
+      el.textContent = data.ok ? data.output : (data.error || data.output);
+      el.className = 'mono ' + (data.ok ? 'ok' : 'err');
+      load();
+    }
+
+    function commit() { post('/api/commit', { message: document.getElementById('message').value }, 'commitResult'); }
+    function push() { post('/api/push', {}, 'commitResult'); }
+    function pull() { post('/api/pull', {}, 'pullResult'); }
+    function setRemote() { post('/api/remote', { url: document.getElementById('remote').value }, 'settingsResult'); }
+    function setConfig() { post('/api/config', { name: document.getElementById('name').value, email: document.getElementById('email').value }, 'settingsResult'); }
+
+    load();
+  </script>
+</body>
+</html>

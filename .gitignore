@@ -1,4 +1,5 @@
 server/venv/
+git-sync/venv/
 server/data/
 dist/
 __pycache__/
