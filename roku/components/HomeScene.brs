@@ -44,6 +44,7 @@ sub init()
     m.streamUrl = ""
     m.isLive = false
     m.startPos = 0
+    m.focusResults = false
     m.retryCount = 0
     m.retrying = false
     m.readyAttempts = 0
@@ -568,6 +569,7 @@ sub onSearchEntered(ev as Object)
             m.mode = "list"
             m.heading.text = "Search: " + q
             m.hint.text = "OK: watch / record   *: favorite"
+            m.focusResults = true
             api("/channels?q=" + urlEnc(q), "channels")
         end if
     end if
@@ -937,7 +939,8 @@ sub onApiResponse(ev as Object)
         end for
         setRows(labels, r.items, "No channels match '" + m.lastQuery + "'. Only channels in enabled groups are searched (Pi Settings > Channel groups).")
         m.hint.text = "OK: watch / record / favorite   *: star   Left: menu"
-        if labels.count() > 0 and m.top.dialog = invalid then m.content.setFocus(true)
+        if m.focusResults and labels.count() > 0 and m.top.dialog = invalid then m.content.setFocus(true)
+        m.focusResults = false
     else if tag = "groups"
         if m.mode <> "categories" then return
         labels = []
