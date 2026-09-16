@@ -484,13 +484,14 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             stopVideo()
             return true
         else if key = "down"
-            if m.top.dialog = invalid then trickMenu()
+            if m.top.dialog = invalid and not m.guideOverlay then trickMenu()
             return true
         else if key = "up"
             if m.top.dialog = invalid and not m.guideOverlay
                 showGuideOverlay()
+                return true
             end if
-            return true
+            return false
         end if
         return false
     end if
@@ -628,11 +629,14 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.startPos = startPos
     m.retryCount = 0
     m.retrying = false
+    m.readyTimer.control = "stop"
+    m.retryTimer.control = "stop"
     if m.top.dialog <> invalid and m.top.dialog.loading = true
         ' keep the existing loading dialog
     else
         showLoading("Buffering...")
     end if
+    m.video.control = "stop"
     c = CreateObject("roSGNode", "ContentNode")
     c.url = url
     c.title = title
@@ -967,6 +971,7 @@ sub onApiResponse(ev as Object)
     else if tag = "guide"
         if m.mode <> "grid" and not m.guideOverlay then return
         m.grid.data = r
+        if m.guideOverlay then m.grid.setFocus(true)
         n = 0
         if r.channels <> invalid then n = r.channels.count()
         if n = 0 and m.gridFilter = "favorites=1"
