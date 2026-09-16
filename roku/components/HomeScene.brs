@@ -42,6 +42,7 @@ sub init()
     m.streamUrl = ""
     m.isLive = false
     m.startPos = 0
+    m.guideOverlay = false
     m.retryCount = 0
     m.retrying = false
     m.readyAttempts = 0
@@ -350,6 +351,7 @@ end sub
 sub onGridSelected()
     sel = m.grid.selected
     if sel = invalid or sel.channel = invalid then return
+    if m.guideOverlay then hideGuideOverlay()
     channelMenu(sel.channel, sel.program)
 end sub
 
@@ -373,7 +375,11 @@ sub onGridPage()
 end sub
 
 sub onGridBack()
-    m.menu.setFocus(true)
+    if m.guideOverlay
+        hideGuideOverlay()
+    else
+        m.menu.setFocus(true)
+    end if
 end sub
 
 sub onGridDetail()
@@ -476,6 +482,11 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             return true
         else if key = "down"
             if m.top.dialog = invalid then trickMenu()
+            return true
+        else if key = "up"
+            if m.top.dialog = invalid and not m.guideOverlay
+                showGuideOverlay()
+            end if
             return true
         end if
         return false
@@ -649,6 +660,31 @@ sub hideLoading()
     end if
 end sub
 
+sub showGuideOverlay()
+    m.guideOverlay = true
+    if m.grid.data = invalid then loadGrid()
+    m.video.translation = [960, 0]
+    m.video.width = 960
+    m.video.height = 1080
+    m.grid.visible = true
+    m.grid.translation = [20, 120]
+    m.grid.scale = [0.55, 0.55]
+    m.grid.setFocus(true)
+    m.hint.text = "OK: menu   Back: close guide"
+end sub
+
+sub hideGuideOverlay()
+    m.guideOverlay = false
+    m.video.translation = [0, 0]
+    m.video.width = 1920
+    m.video.height = 1080
+    m.grid.visible = false
+    m.grid.translation = [470, 170]
+    m.grid.scale = [1, 1]
+    m.video.setFocus(true)
+    m.hint.text = "OK: pause/play/rewind   Back: stop   Down: controls"
+end sub
+
 sub showResumeDialog(url as String, title as String, isLive as Boolean, resumeFrom as Float, recordingId as Integer)
     m.resumeUrl = url
     m.resumeTitle = title
@@ -742,6 +778,15 @@ sub stopVideo(clearResume = false)
     m.readyTimer.control = "stop"
     m.video.control = "stop"
     m.video.visible = false
+    if m.guideOverlay
+        m.guideOverlay = false
+        m.video.translation = [0, 0]
+        m.video.width = 1920
+        m.video.height = 1080
+        m.grid.visible = false
+        m.grid.translation = [470, 170]
+        m.grid.scale = [1, 1]
+    end if
     m.recordingId = -1
     m.isLive = false
     m.retrying = false
@@ -849,7 +894,7 @@ sub onApiResponse(ev as Object)
             toast("Could not save recording")
         end if
     else if tag = "guide"
-        if m.mode <> "grid" then return
+        if m.mode <> "grid" and not m.guideOverlay then return
         m.grid.data = r
         n = 0
         if r.channels <> invalid then n = r.channels.count()
