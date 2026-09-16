@@ -194,12 +194,10 @@ def api_sports():
     if not team:
         return jsonify({"ok": False, "error": "Missing team"}), 400
     now = _now()
-    # clean the user query and add a singular form for plurals like Astros -> Astro
+    # clean the query; also try the possessive form so "Astros" matches "Astro's"
     base = team.replace(" ", "").replace("'", "").replace("-", "").lower()
-    patterns = [f"%{base}%"]
-    if base.endswith("s") and len(base) > 1:
-        patterns.append(f"%{base[:-1]}%")
-    placeholders = " OR ".join(["(LOWER(p.title) LIKE ? OR LOWER(COALESCE(p.description,'')) LIKE ?)"] * len(patterns))
+    patterns = list({base, base.rstrip("s") + "'s"})
+    placeholders = " OR ".join(["(INSTR(LOWER(p.title), ?) > 0 OR INSTR(LOWER(COALESCE(p.description, '')), ?) > 0)"] * len(patterns))
     args = []
     for p in patterns:
         args.extend([p, p])
