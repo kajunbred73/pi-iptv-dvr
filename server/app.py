@@ -235,25 +235,17 @@ def api_timeshift():
     else:
         start, stop, title = now, now + 4 * 3600, ch["name"]
 
-    # Reuse an existing timeshift for the same channel + show if already recording
-    if cur:
-        existing = db.row("SELECT recording_id FROM schedules WHERE channel_id=? AND stop=? AND title LIKE '[timeshift] %' AND status='recording'", (cid, stop))
+    # Rejoin a live buffer that is still running for this channel (instant re-tune).
+    rid = streamer.recorder.active_timeshift(cid)
+    if rid is None:
+        # Single viewer: changing channel abandons the previous (un-kept) live buffer right
+        # away instead of letting several ffmpegs pile up on the Pi.
+        streamer.recorder.stop_other_timeshifts()
+        if len(streamer.recorder.active) >= 3:
+            return jsonify({"ok": False, "error": "Too many recordings in progress"}), 503
+        rid = streamer.recorder.start_now(cid, start, stop, title)
     else:
-        existing = db.row("SELECT recording_id FROM schedules WHERE channel_id=? AND title LIKE '[timeshift] %' AND status='recording' ORDER BY start DESC LIMIT 1", (cid,))
-    if existing:
-        rid = existing["recording_id"]
-        return jsonify({
-            "ok": True,
-            "recording_id": rid,
-            "stream_url": f"{_base_url()}/recordings/{rid}/index.m3u8",
-            "title": title,
-            "stop": stop,
-        })
-
-    if len(streamer.recorder.active) >= 4:
-        return jsonify({"ok": False, "error": "Too many recordings in progress"}), 503
-
-    rid = streamer.recorder.start_now(cid, start, stop, title)
+        streamer.recorder.touch_timeshift(rid)
     return jsonify({
         "ok": True,
         "recording_id": rid,
@@ -265,29 +257,38 @@ def api_timeshift():
 
 @app.post("/api/timeshift/<int:rid>/keep")
 def api_timeshift_keep(rid):
-    """Mark a timeshift recording as a keep (do not auto-delete in 24h)."""
+    """Turn a live buffer into a normal recording (runs to the end of the show, never auto-deleted)."""
     rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,)) or abort(404)
     new_title = rec["title"]
     if new_title.startswith("[timeshift] "):
         new_title = new_title[12:]
     db.execute("UPDATE recordings SET title=? WHERE id=?", (new_title, rid))
     db.execute("UPDATE schedules SET title=? WHERE recording_id=?", (new_title, rid))
+    streamer.recorder.keep_timeshift(rid)
     return jsonify({"ok": True})
+
+
+@app.post("/api/timeshift/<int:rid>/touch")
+def api_timeshift_touch(rid):
+    """Heartbeat from a viewer; un-touched live buffers are stopped after timeshift_idle_seconds."""
+    return jsonify({"ok": True, "active": streamer.recorder.touch_timeshift(rid)})
 
 
 @app.get("/api/timeshift/<int:rid>/ready")
 def api_timeshift_ready(rid):
-    """Return true once the recording has at least one HLS segment."""
+    """ready=true once enough HLS segments exist for the Roku to start without hitting the end of
+    the playlist (which is what made playback stutter/loop with a single segment)."""
     rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,)) or abort(404)
-    pl = os.path.join(config.get("recordings_dir"), rec["path"], "index.m3u8")
-    ready = False
-    if os.path.exists(pl):
-        try:
-            text = open(pl).read(8192)
-            ready = ".ts" in text
-        except Exception:
-            pass
-    return jsonify({"ok": True, "ready": ready, "stream_url": f"{_base_url()}/recordings/{rid}/index.m3u8"})
+    segs, ended = streamer.recorder.segments(rid)
+    streamer.recorder.touch_timeshift(rid)
+    return jsonify({
+        "ok": True,
+        "ready": segs >= config.get("timeshift_min_segments") or (ended and segs > 0),
+        "segments": segs,
+        "status": rec["status"],
+        "error": streamer.recorder.last_error(rid) if rec["status"] != "recording" else "",
+        "stream_url": f"{_base_url()}/recordings/{rid}/index.m3u8",
+    })
 
 
 @app.delete("/api/schedules/by-program")
@@ -369,6 +370,8 @@ def live_file(cid, fname):
 @app.get("/recordings/<int:rid>/<path:fname>")
 def recording_file(rid, fname):
     rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,)) or abort(404)
+    if fname.endswith(".m3u8"):
+        streamer.recorder.touch_timeshift(rid)
     resp = send_from_directory(os.path.join(config.get("recordings_dir"), rec["path"]), fname, conditional=False)
     resp.headers["Cache-Control"] = "no-cache"
     return resp
@@ -409,7 +412,8 @@ def setup_xtream():
     pw = request.form.get("xtream_pass", "").strip()
     if host and not host.startswith("http"):
         host = "http://" + host
-    updates = {"xtream_host": host, "xtream_user": user, "xtream_pass": pw}
+    updates = {"xtream_host": host, "xtream_user": user, "xtream_pass": pw,
+               "xtream_hls_input": request.form.get("xtream_hls_input") == "1"}
     if host and user and pw:
         creds = f"username={quote(user)}&password={quote(pw)}"
         updates["m3u_url"] = f"{host}/get.php?{creds}&type=m3u_plus&output=ts"

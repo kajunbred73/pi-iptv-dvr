@@ -15,9 +15,23 @@ log = logging.getLogger("streamer")
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 
 
+_XTREAM_TS = re.compile(r"(/live/[^/]+/[^/]+/\d+)\.ts$")
+
+
+def _input_url(url):
+    if config.get("xtream_hls_input"):
+        return _XTREAM_TS.sub(r"\1.m3u8", url)
+    return url
+
+
 def _input_args(url):
+    url = _input_url(url)
+    # IPTV feeds are full of corrupt packets and timestamp jumps; drop the junk and let ffmpeg
+    # regenerate timestamps so the copied-through output stays monotonic (otherwise the Roku
+    # jumps back every few seconds).
     args = ["-hide_banner", "-loglevel", "warning", "-nostdin",
-            "-fflags", "+genpts+discardcorrupt"]
+            "-fflags", "+genpts+discardcorrupt+igndts", "-err_detect", "ignore_err",
+            "-analyzeduration", "3000000", "-probesize", "5000000"]
     if url.startswith("http"):
         args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
                  "-user_agent", config.get("user_agent")]
@@ -30,7 +44,9 @@ def _input_args(url):
 def _copy_args():
     # Remux only (no transcoding) so a Pi can keep up. Roku plays H.264/AAC HLS,
     # which is what nearly all IPTV sources already are.
-    return ["-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-sn", "-dn"]
+    return ["-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-sn", "-dn",
+            "-avoid_negative_ts", "make_zero", "-max_interleave_delta", "0",
+            "-muxdelay", "0", "-muxpreload", "0"]
 
 
 # ---------------------------------------------------------------- live proxy
@@ -138,6 +154,7 @@ def _safe_name(s):
 class Recorder:
     def __init__(self):
         self.active = {}   # schedule_id -> (Popen, recording_id)
+        self.timeshift = {}  # recording_id -> {"sid", "touch", "keep"}
         self.lock = threading.Lock()
 
     def start(self):
@@ -162,21 +179,34 @@ class Recorder:
                       (pre, now, post, now))
         for s in due:
             self._start(s, now, post)
+        # Live buffers nobody is watching any more: stop them so they don't fill the SD card.
+        idle = config.get("timeshift_idle_seconds")
         with self.lock:
-            for sid, (proc, rid) in list(self.active.items()):
-                sched = db.row("SELECT * FROM schedules WHERE id=?", (sid,))
-                expired = sched is None or now >= sched["stop"] + post or sched["status"] == "cancelled"
-                if expired and proc.poll() is None:
-                    proc.terminate()
-                if proc.poll() is not None or expired:
-                    try:
-                        proc.wait(10)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+            stale = [(rid, t["sid"]) for rid, t in self.timeshift.items()
+                     if not t["keep"] and now - t["touch"] > idle]
+            active = list(self.active.items())
+        for rid, sid in stale:
+            log.info("timeshift idle, stopping rec=%s", rid)
+            self.cancel(sid)
+        # Never wait on ffmpeg while holding the lock: API requests (touch/ready/playlist)
+        # need it and would stall for the whole shutdown.
+        for sid, (proc, rid) in active:
+            sched = db.row("SELECT * FROM schedules WHERE id=?", (sid,))
+            expired = sched is None or now >= sched["stop"] + post or sched["status"] == "cancelled"
+            if expired and proc.poll() is None:
+                proc.terminate()
+            if proc.poll() is not None or expired:
+                try:
+                    proc.wait(10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                with self.lock:
+                    owned = self.active.pop(sid, None) is not None
+                if owned:
                     self._finish(sid, rid, proc.returncode)
-                    del self.active[sid]
 
-    def _start(self, sched, now, post):
+    def _start(self, sched, now, post, timeshift=False):
         ch = db.row("SELECT * FROM channels WHERE id=?", (sched["channel_id"],))
         if not ch:
             db.execute("UPDATE schedules SET status='failed' WHERE id=?", (sched["id"],))
@@ -195,9 +225,11 @@ class Recorder:
              now, sched["stop"] + post, folder))
         duration = max(60, sched["stop"] + post - now)
         # Event-style HLS: playable on Roku while still recording; ENDLIST written on finish.
+        # Shorter segments for live buffers so the viewer can join sooner.
+        seg = "3" if timeshift else "6"
         cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args() + [
             "-t", str(duration),
-            "-f", "hls", "-hls_time", "6", "-hls_list_size", "0",
+            "-f", "hls", "-hls_time", seg, "-hls_list_size", "0",
             "-hls_playlist_type", "event",
             "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
             playlist,
@@ -206,6 +238,8 @@ class Recorder:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=open(os.path.join(out_dir, "ffmpeg.log"), "ab"))
         with self.lock:
             self.active[sched["id"]] = (proc, rid)
+            if timeshift:
+                self.timeshift[rid] = {"sid": sched["id"], "touch": now, "keep": False}
         db.execute("UPDATE schedules SET status='recording', recording_id=? WHERE id=?", (rid, sched["id"]))
         return rid
 
@@ -225,6 +259,8 @@ class Recorder:
         log.info("record finish sched=%s rec=%s rc=%s status=%s size=%d", sid, rid, rc, status, size)
         db.execute("UPDATE recordings SET status=?, size_bytes=?, stop=? WHERE id=?", (status, size, int(time.time()), rid))
         db.execute("UPDATE schedules SET status=? WHERE id=? AND status != 'cancelled'", (status, sid))
+        with self.lock:
+            self.timeshift.pop(rid, None)
 
     def cancel(self, sid):
         db.execute("UPDATE schedules SET status='cancelled' WHERE id=? AND status IN ('scheduled','recording')", (sid,))
@@ -234,20 +270,92 @@ class Recorder:
             entry[0].terminate()
 
     def start_now(self, cid, start, stop, title="Timeshift"):
-        """Create and immediately start a recording for the current show."""
+        """Create and immediately start a live-buffer recording for the current show."""
         now = int(time.time())
         sid = db.execute(
             "INSERT INTO schedules(channel_id,title,start,stop,status,created) VALUES(?,?,?,?,'scheduled',?)",
             (cid, f"[timeshift] {title}", start, stop, now))
         sched = db.row("SELECT * FROM schedules WHERE id=?", (sid,))
-        return self._start(sched, now, 0)
+        return self._start(sched, now, 0, timeshift=True)
+
+    def active_timeshift(self, cid):
+        """recording_id of a live buffer still running for this channel, or None."""
+        with self.lock:
+            rids = list(self.timeshift)
+        for rid in rids:
+            rec = db.row("SELECT id FROM recordings WHERE id=? AND channel_id=? AND status='recording'", (rid, cid))
+            if rec:
+                return rid
+        return None
+
+    def touch_timeshift(self, rid):
+        with self.lock:
+            t = self.timeshift.get(rid)
+            if t:
+                t["touch"] = int(time.time())
+            return t is not None
+
+    def stop_other_timeshifts(self):
+        """Stop every un-kept live buffer now (viewer changed channel); finish them off-thread."""
+        with self.lock:
+            victims = [(rid, t["sid"]) for rid, t in self.timeshift.items() if not t["keep"]]
+            entries = [(sid, self.active.pop(sid, None), rid) for rid, sid in victims]
+            for rid, _ in victims:
+                self.timeshift.pop(rid, None)
+        for sid, entry, rid in entries:
+            db.execute("UPDATE schedules SET status='cancelled' WHERE id=? AND status IN ('scheduled','recording')", (sid,))
+            if entry is None:
+                continue
+            proc = entry[0]
+            if proc.poll() is None:
+                proc.terminate()
+
+            def _reap(p=proc, s=sid, r=rid):
+                try:
+                    p.wait(10)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait()
+                self._finish(s, r, p.returncode)
+            threading.Thread(target=_reap, daemon=True).start()
+
+    def keep_timeshift(self, rid):
+        with self.lock:
+            t = self.timeshift.get(rid)
+            if t:
+                t["keep"] = True
 
     def _reap_timeshift(self):
-        """Delete timeshift recordings older than 24 hours that were not kept."""
-        cutoff = int(time.time()) - 24 * 3600
-        for r in db.rows("SELECT * FROM recordings WHERE status='done' AND title LIKE '[timeshift] %' AND stop < ?",
-                         (cutoff,)):
+        """Delete finished live buffers that were not kept."""
+        cutoff = int(time.time()) - config.get("timeshift_keep_hours") * 3600
+        for r in db.rows("SELECT * FROM recordings WHERE status IN ('done','failed') "
+                         "AND title LIKE '[timeshift] %' AND stop < ?", (cutoff,)):
             delete_recording(r["id"])
+
+    def last_error(self, rid):
+        """Last non-empty line of the recording's ffmpeg.log (why it failed), or ''."""
+        rec = db.row("SELECT path FROM recordings WHERE id=?", (rid,))
+        if not rec:
+            return ""
+        try:
+            with open(os.path.join(config.get("recordings_dir"), rec["path"], "ffmpeg.log"), errors="replace") as f:
+                lines = [l.strip() for l in f.read()[-4000:].splitlines() if l.strip()]
+        except OSError:
+            return ""
+        return lines[-1] if lines else ""
+
+    def segments(self, rid):
+        """(segment count, playlist finished?) for a recording's HLS playlist."""
+        rec = db.row("SELECT path FROM recordings WHERE id=?", (rid,))
+        if not rec:
+            return 0, False
+        pl = os.path.join(config.get("recordings_dir"), rec["path"], "index.m3u8")
+        try:
+            with open(pl) as f:
+                text = f.read()
+        except OSError:
+            return 0, False
+        return text.count("#EXTINF"), "#EXT-X-ENDLIST" in text
 
 
 recorder = Recorder()

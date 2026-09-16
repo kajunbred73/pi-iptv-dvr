@@ -14,6 +14,8 @@ sub init()
     m.readyTimer.observeField("fire", "onReadyCheck")
     m.retryTimer = m.top.findNode("retryTimer")
     m.retryTimer.observeField("fire", "onRetry")
+    m.playTimer = m.top.findNode("playTimer")
+    m.playTimer.observeField("fire", "onPlayTimeout")
     m.statusTimer = m.top.findNode("statusTimer")
 
     m.tabs = ["Favorites", "Guide", "Search", "Categories", "Recordings", "Scheduled", "Settings"]
@@ -43,6 +45,7 @@ sub init()
     m.isLive = false
     m.startPos = 0
     m.guideOverlay = false
+    m.focusResults = false
     m.retryCount = 0
     m.retrying = false
     m.readyAttempts = 0
@@ -114,12 +117,12 @@ function fmtDuration(t as Dynamic) as String
     if t = invalid then return ""
     t = Int(t)
     h = Int(t / 3600)
-    m = Int((t mod 3600) / 60)
+    mins = Int((t mod 3600) / 60)
     s = t mod 60
     if h > 0
-        return h.toStr() + ":" + pad2(m) + ":" + pad2(s)
+        return h.toStr() + ":" + pad2(mins) + ":" + pad2(s)
     else
-        return m.toStr() + ":" + pad2(s)
+        return mins.toStr() + ":" + pad2(s)
     end if
 end function
 
@@ -577,6 +580,7 @@ sub onSearchEntered(ev as Object)
             m.mode = "list"
             m.heading.text = "Search: " + q
             m.hint.text = "OK: watch / record   *: favorite"
+            m.focusResults = true
             api("/channels?q=" + urlEnc(q), "channels")
         end if
     end if
@@ -619,6 +623,7 @@ end sub
 
 sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.playTitle = title
+    m.streamUrl = url
     m.isLive = isLive
     m.startPos = startPos
     m.retryCount = 0
@@ -636,7 +641,35 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.video.content = c
     m.video.loop = false
     m.video.visible = true
+    m.video.setFocus(true)
     m.video.control = "play"
+    m.playTimer.control = "start"
+end sub
+
+' Something went wrong starting/playing video: stop and tell the user why (a toast is hidden
+' behind the loading box, so use a real dialog).
+sub playError(msg as String)
+    stopVideo()
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = "Can't play"
+    d.message = msg
+    d.buttons = ["OK"]
+    d.observeField("buttonSelected", "onErrorDialog")
+    m.top.dialog = d
+    d.setFocus(true)
+end sub
+
+sub onErrorDialog(ev as Object)
+    d = ev.getRoSGNode()
+    d.close = true
+    m.top.dialog = invalid
+    focusPane()
+end sub
+
+sub onPlayTimeout()
+    if m.video.visible and m.video.state <> "playing" and m.video.state <> "paused"
+        playError("The stream did not start within 30 seconds (player state: " + m.video.state + "). " + Chr(10) + "Check that the Pi service is running: sudo systemctl status pi-iptv-dvr")
+    end if
 end sub
 
 sub showLoading(msg as String)
@@ -719,7 +752,7 @@ sub playChannel(ch as Object)
     m.pendingChannel = ch
     m.recordingId = -1
     m.playTitle = ch.name
-    showLoading("Starting live buffer...")
+    showLoading("Tuning...")
     api("/timeshift", "timeshift", "POST", FormatJson({ channel_id: ch.id }))
 end sub
 
@@ -728,8 +761,13 @@ sub trickMenu()
     d = CreateObject("roSGNode", "Dialog")
     d.title = m.playTitle
     d.message = "OK: select   Back: close"
-    buttons = ["Pause", "Play", "Rewind", "Keep recording"]
-    actions = ["pause", "play", "rewind", "keep"]
+    if m.video.state = "paused"
+        buttons = ["Play", "Back 30s", "Forward 30s", "Jump to live", "Keep recording"]
+        actions = ["play", "back30", "fwd30", "live", "keep"]
+    else
+        buttons = ["Pause", "Back 30s", "Forward 30s", "Jump to live", "Keep recording"]
+        actions = ["pause", "back30", "fwd30", "live", "keep"]
+    end if
     d.buttons = buttons
     d.addField("actions", "array", false)
     d.addField("recordingId", "integer", false)
@@ -750,8 +788,15 @@ sub onTrickMenu(ev as Object)
         m.video.control = "pause"
     else if action = "play"
         m.video.control = "resume"
-    else if action = "rewind"
-        m.video.seek = 0
+    else if action = "back30"
+        p = m.video.position - 30
+        if p < 0 then p = 0
+        m.video.seek = p
+    else if action = "fwd30"
+        m.video.seek = m.video.position + 30
+    else if action = "live"
+        ' Reloading the live playlist puts the player back at the live edge.
+        m.video.control = "play"
     else if action = "keep"
         if d.recordingId > 0
             api("/timeshift/" + d.recordingId.toStr() + "/keep", "keep", "POST", "")
@@ -776,6 +821,7 @@ sub stopVideo(clearResume = false)
     end if
     hideLoading()
     m.readyTimer.control = "stop"
+    m.playTimer.control = "stop"
     m.video.control = "stop"
     m.video.visible = false
     if m.guideOverlay
@@ -798,6 +844,7 @@ sub onVideoState()
     st = m.video.state
     if st = "playing"
         hideLoading()
+        m.playTimer.control = "stop"
         m.video.setFocus(true)
         if not m.isLive and m.startPos > 0
             m.video.seek = m.startPos
@@ -806,23 +853,32 @@ sub onVideoState()
         m.retryCount = 0
         m.retrying = false
     else if st = "error"
-        if m.recordingId >= 0 and m.isLive and m.retryCount < 15 and not m.retrying
+        if m.recordingId >= 0 and m.isLive and m.retryCount < 5 and not m.retrying
             m.retrying = true
             m.retryCount = m.retryCount + 1
             m.retryTimer.control = "start"
         else
-            stopVideo()
-            toast("Playback error: " + txt(m.video.errorMsg) + " (code " + txt(m.video.errorCode) + ")")
+            playError("Playback error: " + txt(m.video.errorMsg) + " (code " + txt(m.video.errorCode) + ")" + Chr(10) + m.streamUrl)
         end if
     else if st = "finished"
-        stopVideo(true)
+        ' A live buffer only really ends when the Pi writes ENDLIST; if the player ran off the
+        ' end of the growing playlist, rejoin at the live edge instead of stopping/looping.
+        if m.recordingId >= 0 and m.isLive and m.retryCount < 5 and not m.retrying
+            m.retrying = true
+            m.retryCount = m.retryCount + 1
+            m.retryTimer.control = "start"
+        else
+            stopVideo(true)
+        end if
     end if
 end sub
 
 sub onRetry()
     m.retrying = false
     if m.video.visible and m.recordingId >= 0
-        m.video.control = "play"
+        ' Ask the Pi whether the buffer is still being written before rejoining.
+        m.readyAttempts = 0
+        api("/timeshift/" + m.recordingId.toStr() + "/ready", "rejoin")
     end if
 end sub
 
@@ -835,14 +891,21 @@ end sub
 ' ------------------------------------------------------------------ API responses
 
 sub loadStatus()
-    if m.server <> "" then api("/status", "status")
+    if m.server = "" then return
+    api("/status", "status")
+    ' Heartbeat so the Pi keeps the live buffer running while we watch (or sit paused).
+    if m.video.visible and m.isLive and m.recordingId >= 0
+        api("/timeshift/" + m.recordingId.toStr() + "/touch", "touch", "POST", "")
+    end if
 end sub
 
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
-    if t.tag = "timeshift" or t.tag = "keep" or t.tag = "readycheck"
+    if t.tag = "touch" then return
+    if t.tag = "timeshift" or t.tag = "readycheck" or t.tag = "rejoin"
         m.readyTimer.control = "stop"
-        hideLoading()
+        playError("The Pi did not answer " + t.url + Chr(10) + t.error + Chr(10) + "If this says HTTP 404, the Pi is running old server code: cd pi-iptv-dvr && git pull && sudo systemctl restart pi-iptv-dvr")
+        return
     end if
     if t.tag = "status"
         m.status.text = "Cannot reach " + m.server
@@ -867,26 +930,34 @@ sub onApiResponse(ev as Object)
             m.readyAttempts = 0
             m.readyTimer.control = "start"
         else
-            hideLoading()
-            toast("Could not start timeshift: " + txt(r.error))
+            playError("Could not start the live buffer: " + txt(r.error))
         end if
     else if tag = "readycheck"
         if r.ready = true or r.ready = 1
             m.readyTimer.control = "stop"
-            saved = readResumePos(m.recordingId)
-            if saved > 5
-                showResumeDialog(m.streamUrl, m.playTitle, true, saved, m.recordingId)
-            else
-                play(m.streamUrl, m.playTitle, true)
-            end if
+            play(m.streamUrl, m.playTitle, true)
+        else if txt(r.status) <> "recording"
+            m.readyTimer.control = "stop"
+            playError("The Pi could not open this channel's stream. ffmpeg said:" + Chr(10) + txt(r.error))
         else
             m.readyAttempts = m.readyAttempts + 1
+            if m.top.dialog <> invalid and m.top.dialog.loading = true
+                m.top.dialog.title = "Buffering live TV... " + txt(r.segments) + "/3"
+            end if
             if m.readyAttempts > 60
                 m.readyTimer.control = "stop"
-                hideLoading()
-                toast("Recording did not start on the Pi")
+                playError("The Pi is still not producing video after 60 s (" + txt(r.segments) + " segments). The provider stream may be down or too slow.")
             end if
         end if
+    else if tag = "rejoin"
+        if not m.video.visible then return
+        if txt(r.status) = "recording" or (r.ready = true)
+            m.video.control = "play"
+        else
+            stopVideo(true)
+        end if
+    else if tag = "touch"
+        ' heartbeat; nothing to do
     else if tag = "keep"
         if r.ok = true or r.ok = 1
             toast("Recording saved")
@@ -913,7 +984,8 @@ sub onApiResponse(ev as Object)
         end for
         setRows(labels, r.items, "No channels match '" + m.lastQuery + "'. Only channels in enabled groups are searched (Pi Settings > Channel groups).")
         m.hint.text = "OK: watch / record / favorite   *: star   Left: menu"
-        if labels.count() > 0 and m.top.dialog = invalid then m.content.setFocus(true)
+        if m.focusResults and labels.count() > 0 and m.top.dialog = invalid then m.content.setFocus(true)
+        m.focusResults = false
     else if tag = "groups"
         if m.mode <> "categories" then return
         labels = []

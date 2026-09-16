@@ -51,6 +51,7 @@
     <label>Server URL <input name="xtream_host" value="{{ cfg.xtream_host }}" placeholder="http://provider.example.com:8080"></label>
     <label>Username <input name="xtream_user" value="{{ cfg.xtream_user }}"></label>
     <label>Password <input name="xtream_pass" type="password" value="{{ cfg.xtream_pass }}"></label>
+    <label><input type="checkbox" name="xtream_hls_input" value="1" {% if cfg.xtream_hls_input %}checked{% endif %}> Use provider's HLS (.m3u8) streams instead of raw .ts (try this if video stutters or jumps)</label>
     <button>Save &amp; import</button>
   </form>
   <form method="post" action="/setup" class="card">
