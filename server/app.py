@@ -187,40 +187,6 @@ def api_guide():
     return jsonify({"start": start, "end": end, "now": now, "channels": out})
 
 
-@app.get("/api/sports")
-def api_sports():
-    """Find the first channel currently playing or about to start a program matching the team name."""
-    team = request.args.get("team", "")
-    if not team:
-        return jsonify({"ok": False, "error": "Missing team"}), 400
-    now = _now()
-    # clean the query; also try the possessive form so "Astros" matches "Astro's"
-    base = team.replace(" ", "").replace("'", "").replace("-", "").lower()
-    patterns = list({base, base.rstrip("s") + "'s"})
-    placeholders = " OR ".join(["(INSTR(LOWER(p.title), ?) > 0 OR INSTR(LOWER(COALESCE(p.description, '')), ?) > 0)"] * len(patterns))
-    args = []
-    for p in patterns:
-        args.extend([p, p])
-    args.extend([now + 1800, now])
-    row = db.row(
-        "SELECT c.id AS channel_id, c.tvg_id, c.name AS channel_name, p.title, p.start, p.stop "
-        "FROM programs p JOIN channels c ON c.tvg_id = p.tvg_id "
-        "WHERE (" + placeholders + ") "
-        "AND p.start <= ? AND p.stop > ? "
-        "ORDER BY p.start DESC LIMIT 1",
-        tuple(args)
-    )
-    if not row:
-        return jsonify({"ok": True, "found": False})
-    ch = db.row("SELECT * FROM channels WHERE id=?", (row["channel_id"],))
-    return jsonify({
-        "ok": True,
-        "found": True,
-        "channel": _channel_json(ch),
-        "program": {"title": row["title"], "start": row["start"], "stop": row["stop"]}
-    })
-
-
 @app.get("/api/schedules")
 def api_schedules():
     return jsonify(db.rows(

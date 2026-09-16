@@ -670,7 +670,7 @@ end sub
 sub findGame(name as String)
     m.pendingTeam = name
     showLoading("Finding " + name + "...")
-    api("/sports?team=" + urlEnc(name), "sports")
+    api("/channels?q=" + urlEnc(name), "sports")
 end sub
 
 sub promptServer()
@@ -1123,14 +1123,10 @@ sub onApiResponse(ev as Object)
         api("/recordings", "recordings")
     else if tag = "sports"
         hideLoading()
-        if r.ok = false
-            toast("Server error")
-        else if r.found = false or r.found = 0
+        if r.items = invalid or r.items.count() = 0
             toast("No live game found for " + txt(m.pendingTeam))
-        else if r.channel <> invalid
-            playChannel(r.channel)
         else
-            toast("Could not tune game")
+            playChannel(r.items[0])
         end if
     else if tag = "refresh"
         if r.started = true then toast("Import started on server; it may take a few minutes") else toast("Import already running")
