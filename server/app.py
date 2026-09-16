@@ -194,11 +194,14 @@ def api_sports():
     if not team:
         return jsonify({"ok": False, "error": "Missing team"}), 400
     now = _now()
-    t = f"%{team}%"
+    # normalize: remove spaces, apostrophes, dashes so "Astros" matches "Astro's"
+    clean = team.replace(" ", "").replace("'", "").replace("-", "").lower()
+    t = f"%{clean}%"
     row = db.row(
         "SELECT c.id AS channel_id, c.tvg_id, c.name AS channel_name, p.title, p.start, p.stop "
         "FROM programs p JOIN channels c ON c.tvg_id = p.tvg_id "
-        "WHERE (LOWER(p.title) LIKE LOWER(?) OR LOWER(p.description) LIKE LOWER(?)) "
+        "WHERE (LOWER(REPLACE(REPLACE(REPLACE(p.title, ' ', ''), '''', ''), '-', '')) LIKE ? "
+        "OR LOWER(REPLACE(REPLACE(REPLACE(IFNULL(p.description, ''), ' ', ''), '''', ''), '-', '')) LIKE ?) "
         "AND p.start <= ? AND p.stop > ? "
         "ORDER BY p.start LIMIT 1",
         (t, t, now, now)
