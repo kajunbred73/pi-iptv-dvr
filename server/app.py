@@ -187,6 +187,33 @@ def api_guide():
     return jsonify({"start": start, "end": end, "now": now, "channels": out})
 
 
+@app.get("/api/sports")
+def api_sports():
+    """Find the first channel currently playing a program matching the team name."""
+    team = request.args.get("team", "")
+    if not team:
+        return jsonify({"ok": False, "error": "Missing team"}), 400
+    now = _now()
+    t = f"%{team}%"
+    row = db.row(
+        "SELECT c.id AS channel_id, c.tvg_id, c.name AS channel_name, p.title, p.start, p.stop "
+        "FROM programs p JOIN channels c ON c.tvg_id = p.tvg_id "
+        "WHERE (LOWER(p.title) LIKE LOWER(?) OR LOWER(p.description) LIKE LOWER(?)) "
+        "AND p.start <= ? AND p.stop > ? "
+        "ORDER BY p.start LIMIT 1",
+        (t, t, now, now)
+    )
+    if not row:
+        return jsonify({"ok": True, "found": False})
+    ch = db.row("SELECT * FROM channels WHERE id=?", (row["channel_id"],))
+    return jsonify({
+        "ok": True,
+        "found": True,
+        "channel": _channel_json(ch),
+        "program": {"title": row["title"], "start": row["start"], "stop": row["stop"]}
+    })
+
+
 @app.get("/api/schedules")
 def api_schedules():
     return jsonify(db.rows(

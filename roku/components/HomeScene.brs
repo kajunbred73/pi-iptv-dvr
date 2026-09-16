@@ -18,7 +18,7 @@ sub init()
     m.playTimer.observeField("fire", "onPlayTimeout")
     m.statusTimer = m.top.findNode("statusTimer")
 
-    m.tabs = ["Favorites", "Guide", "Search", "Categories", "Recordings", "Scheduled", "Settings"]
+    m.tabs = ["Favorites", "Guide", "Search", "Categories", "Sports Teams", "Recordings", "Scheduled", "Settings"]
     m.menu.content = makeList(m.tabs)
     m.menu.observeField("itemFocused", "onMenuFocused")
     m.menu.observeField("itemSelected", "onMenuSelected")
@@ -46,6 +46,8 @@ sub init()
     m.startPos = 0
     m.guideOverlay = false
     m.focusResults = false
+    m.teams = []
+    m.pendingTeam = ""
     m.retryCount = 0
     m.retrying = false
     m.readyAttempts = 0
@@ -238,6 +240,10 @@ sub showTab(idx as Integer)
         m.mode = "categories"
         m.hint.text = "OK: open category guide"
         api("/groups", "groups")
+    else if tabName = "Sports Teams"
+        m.mode = "teams"
+        m.hint.text = "OK: find game   *: delete   Back: menu"
+        loadTeams()
     else if tabName = "Recordings"
         m.mode = "recordings"
         m.hint.text = "OK: play   *: delete"
@@ -291,6 +297,8 @@ sub onContentFocused()
         m.detail.text = txt(it.count) + " channels"
     else if m.mode = "recordings"
         m.detail.text = txt(it.description)
+    else if m.mode = "teams"
+        m.detail.text = txt(it.name)
     else if m.mode = "scheduled"
         m.detail.text = fmtDay(it.start) + " " + fmtTime(it.start) + " - " + fmtTime(it["stop"])
     else
@@ -307,6 +315,12 @@ sub onContentSelected()
     else if m.mode = "categories"
         openGrid("group=" + urlEnc(it.name), txt(it.name), txt(it.count) + " channels in this category")
         m.grid.setFocus(true)
+    else if m.mode = "teams"
+        if it.action = "add" then
+            promptTeamAdd()
+        else
+            findGame(it.name)
+        end if
     else if m.mode = "recordings"
         m.recordingId = it.id
         isLive = (it.status = "recording")
@@ -524,6 +538,9 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             else if m.mode = "recordings"
                 deleteFocused()
                 return true
+            else if m.mode = "teams"
+                deleteTeamFocused()
+                return true
             end if
         else if m.menu.hasFocus() and m.tabs[m.menu.itemFocused] = "Search"
             promptSearch()
@@ -586,6 +603,74 @@ sub onSearchEntered(ev as Object)
         end if
     end if
     k.close = true
+end sub
+
+sub loadTeams()
+    t = m.reg.read("teams")
+    if t = invalid
+        m.teams = []
+    else
+        m.teams = ParseJson(t)
+        if m.teams = invalid or m.teams.count() = invalid
+            m.teams = []
+        end if
+    end if
+    labels = ["Add team"]
+    items = [{ name: "Add team", action: "add" }]
+    for each name in m.teams
+        labels.push(name)
+        items.push({ name: name })
+    end for
+    setRows(labels, items, "No teams yet. Select 'Add team' to create your list.")
+end sub
+
+sub promptTeamAdd()
+    k = CreateObject("roSGNode", "KeyboardDialog")
+    k.title = "Add sports team"
+    k.message = "Type the team name (e.g. Cowboys, Celtics)"
+    k.text = ""
+    k.buttons = ["Add", "Cancel"]
+    k.observeField("buttonSelected", "onTeamEntered")
+    m.top.dialog = k
+end sub
+
+sub onTeamEntered(ev as Object)
+    k = ev.getRoSGNode()
+    if ev.getData() = 0
+        name = k.text.trim()
+        if name <> "" then addTeam(name)
+    end if
+    k.close = true
+    m.top.dialog = invalid
+end sub
+
+sub addTeam(name as String)
+    for each t in m.teams
+        if LCase(t) = LCase(name) then return
+    end for
+    m.teams.push(name)
+    m.reg.write("teams", FormatJson(m.teams))
+    m.reg.flush()
+    loadTeams()
+end sub
+
+sub deleteTeamFocused()
+    i = m.content.itemFocused
+    if i < 0 or i >= m.items.count() then return
+    it = m.items[i]
+    if it.action = "add" then return
+    if m.teams.count() > 0
+        m.teams.delete(i - 1)
+        m.reg.write("teams", FormatJson(m.teams))
+        m.reg.flush()
+        loadTeams()
+    end if
+end sub
+
+sub findGame(name as String)
+    m.pendingTeam = name
+    showLoading("Finding " + name + "...")
+    api("/sports?team=" + urlEnc(name), "sports")
 end sub
 
 sub promptServer()
@@ -1036,6 +1121,17 @@ sub onApiResponse(ev as Object)
     else if tag = "delete_ok"
         toast("Deleted")
         api("/recordings", "recordings")
+    else if tag = "sports"
+        hideLoading()
+        if r.ok = false
+            toast("Server error")
+        else if r.found = false or r.found = 0
+            toast("No live game found for " + txt(m.pendingTeam))
+        else if r.channel <> invalid
+            playChannel(r.channel)
+        else
+            toast("Could not tune game")
+        end if
     else if tag = "refresh"
         if r.started = true then toast("Import started on server; it may take a few minutes") else toast("Import already running")
         loadStatus()
