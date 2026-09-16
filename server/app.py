@@ -189,22 +189,28 @@ def api_guide():
 
 @app.get("/api/sports")
 def api_sports():
-    """Find the first channel currently playing a program matching the team name."""
+    """Find the first channel currently playing or about to start a program matching the team name."""
     team = request.args.get("team", "")
     if not team:
         return jsonify({"ok": False, "error": "Missing team"}), 400
     now = _now()
-    # normalize: remove spaces, apostrophes, dashes so "Astros" matches "Astro's"
-    clean = team.replace(" ", "").replace("'", "").replace("-", "").lower()
-    t = f"%{clean}%"
+    # clean the user query and add a singular form for plurals like Astros -> Astro
+    base = team.replace(" ", "").replace("'", "").replace("-", "").lower()
+    patterns = [f"%{base}%"]
+    if base.endswith("s") and len(base) > 1:
+        patterns.append(f"%{base[:-1]}%")
+    placeholders = " OR ".join(["(LOWER(p.title) LIKE ? OR LOWER(COALESCE(p.description,'')) LIKE ?)"] * len(patterns))
+    args = []
+    for p in patterns:
+        args.extend([p, p])
+    args.extend([now + 1800, now])
     row = db.row(
         "SELECT c.id AS channel_id, c.tvg_id, c.name AS channel_name, p.title, p.start, p.stop "
         "FROM programs p JOIN channels c ON c.tvg_id = p.tvg_id "
-        "WHERE (LOWER(REPLACE(REPLACE(REPLACE(p.title, ' ', ''), '''', ''), '-', '')) LIKE ? "
-        "OR LOWER(REPLACE(REPLACE(REPLACE(IFNULL(p.description, ''), ' ', ''), '''', ''), '-', '')) LIKE ?) "
+        "WHERE (" + placeholders + ") "
         "AND p.start <= ? AND p.stop > ? "
-        "ORDER BY p.start LIMIT 1",
-        (t, t, now, now)
+        "ORDER BY p.start DESC LIMIT 1",
+        tuple(args)
     )
     if not row:
         return jsonify({"ok": True, "found": False})
