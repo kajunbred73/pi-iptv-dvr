@@ -10,6 +10,7 @@ sub init()
     m.hint = m.top.findNode("hint")
     m.status = m.top.findNode("status")
     m.video = m.top.findNode("video")
+    m.video.enableUI = false
     m.readyTimer = m.top.findNode("readyTimer")
     m.readyTimer.observeField("fire", "onReadyCheck")
     m.retryTimer = m.top.findNode("retryTimer")
@@ -280,7 +281,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 9"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
