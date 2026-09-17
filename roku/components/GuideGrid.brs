@@ -144,12 +144,25 @@ sub render()
         chBg = "#1C222A"
         if isRow then chBg = "#2A3340"
         m.rows.appendChild(mkRect(0, y, m.CHAN_W - 6, m.ROW_H, chBg))
+        logoW = 0
+        if ch.logo <> invalid and ch.logo <> ""
+            lg = CreateObject("roSGNode", "Poster")
+            lg.translation = [10, y + 11]
+            lg.width = 52
+            lg.height = 52
+            lg.loadDisplayMode = "scaleToFit"
+            lg.loadWidth = 52
+            lg.loadHeight = 52
+            lg.uri = ch.logo
+            m.rows.appendChild(lg)
+            logoW = 62
+        end if
         star = ""
         if ch.favorite = 1 then star = "* "
         num = ""
         if ch.num <> invalid then num = ch.num.toStr() + "  "
-        m.rows.appendChild(mkLabel(12, y, m.CHAN_W - 30, m.ROW_H \ 2 + 6, star + num, "#FFD166", "font:SmallSystemFont"))
-        m.rows.appendChild(mkLabel(12, y + m.ROW_H \ 2 - 6, m.CHAN_W - 30, m.ROW_H \ 2, ch.name, "#FFFFFF", "font:SmallBoldSystemFont"))
+        m.rows.appendChild(mkLabel(12 + logoW, y, m.CHAN_W - 30 - logoW, m.ROW_H \ 2 + 6, star + num, "#FFD166", "font:SmallSystemFont"))
+        m.rows.appendChild(mkLabel(12 + logoW, y + m.ROW_H \ 2 - 6, m.CHAN_W - 30 - logoW, m.ROW_H \ 2, ch.name, "#FFFFFF", "font:SmallBoldSystemFont"))
 
         progs = ch.programs
         if progs = invalid or progs.count() = 0

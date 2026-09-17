@@ -230,12 +230,12 @@ sub showTab(idx as Integer)
         openGrid("", "Guide", "All enabled channels")
     else if tabName = "Search"
         m.mode = "list"
-        m.hint.text = "OK: search by channel name"
+        m.hint.text = "OK: search channels and shows"
         if m.lastQuery <> ""
             m.heading.text = "Search: " + m.lastQuery
-            api("/channels?q=" + urlEnc(m.lastQuery), "channels")
+            api("/search?q=" + urlEnc(m.lastQuery), "search")
         else
-            setRows([], [], "Press OK to type a channel name (e.g. ABC, ESPN, KATC).")
+            setRows([], [], "Press OK to search channels and shows (e.g. ABC, ESPN, Astros).")
         end if
     else if tabName = "Categories"
         m.mode = "categories"
@@ -288,12 +288,18 @@ sub onContentFocused()
     if i < 0 or i >= m.items.count() then return
     it = m.items[i]
     if m.mode = "list"
-        info = txt(it.grp)
-        if it.now <> invalid
-            info = info + "   |   Now: " + txt(it.now.title) + " (" + fmtTime(it.now.start) + " - " + fmtTime(it.now["stop"]) + ")"
+        if it.kind = "program"
+            p = it.p
+            m.detail.text = txt(p.channel_name) + "   " + fmtDay(p.start) + " " + fmtTime(p.start) + " - " + fmtTime(p["stop"])
+        else
+            ch = it.ch
+            info = txt(ch.grp)
+            if ch.now <> invalid
+                info = info + "   |   Now: " + txt(ch.now.title) + " (" + fmtTime(ch.now.start) + " - " + fmtTime(ch.now["stop"]) + ")"
+            end if
+            if ch["next"] <> invalid then info = info + "   |   Next: " + txt(ch["next"].title)
+            m.detail.text = info
         end if
-        if it["next"] <> invalid then info = info + "   |   Next: " + txt(it["next"].title)
-        m.detail.text = info
     else if m.mode = "categories"
         m.detail.text = txt(it.count) + " channels"
     else if m.mode = "recordings"
@@ -312,7 +318,11 @@ sub onContentSelected()
     if i < 0 or i >= m.items.count() then return
     it = m.items[i]
     if m.mode = "list"
-        channelMenu(it, it.now)
+        if it.kind = "program"
+            programMenu(it.p)
+        else
+            channelMenu(it.ch, it.ch.now)
+        end if
     else if m.mode = "categories"
         openGrid("group=" + urlEnc(it.name), txt(it.name), txt(it.count) + " channels in this category")
         m.grid.setFocus(true)
@@ -354,7 +364,8 @@ end sub
 sub favoriteFocused()
     i = m.content.itemFocused
     if i < 0 or i >= m.items.count() then return
-    toggleFavorite(m.items[i])
+    it = m.items[i]
+    if it.kind = "channel" then toggleFavorite(it.ch)
 end sub
 
 sub deleteFocused()
@@ -498,7 +509,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             end if
             stopVideo()
             return true
-        else if key = "down"
+        else if key = "down" or key = "OK"
             if m.top.dialog = invalid and not m.guideOverlay then trickMenu()
             return true
         else if key = "up"
@@ -600,7 +611,7 @@ sub onSearchEntered(ev as Object)
             m.heading.text = "Search: " + q
             m.hint.text = "OK: watch / record   *: favorite"
             m.focusResults = true
-            api("/channels?q=" + urlEnc(q), "channels")
+            api("/search?q=" + urlEnc(q), "search")
         end if
     end if
     k.close = true
@@ -809,7 +820,7 @@ sub hideGuideOverlay()
     m.grid.translation = [470, 170]
     m.grid.scale = [1, 1]
     m.video.setFocus(true)
-    m.hint.text = "OK: pause/play/rewind   Back: stop   Down: controls"
+    m.hint.text = "OK/Down: playback controls   Up: guide   Back: stop"
 end sub
 
 sub showResumeDialog(url as String, title as String, isLive as Boolean, resumeFrom as Float, recordingId as Integer)
@@ -842,6 +853,54 @@ sub onResumeDialog(ev as Object)
     play(m.resumeUrl, m.resumeTitle, m.resumeLive, startPos)
 end sub
 
+' Search hit a program (not a channel): offer watch/record for that airing.
+sub programMenu(p as Object)
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = txt(p.title)
+    d.message = txt(p.channel_name) + "   " + fmtDay(p.start) + " " + fmtTime(p.start) + " - " + fmtTime(p["stop"])
+    buttons = []
+    actions = []
+    if p.now_playing = true
+        buttons.push("Watch now")
+        actions.push("watch")
+    else
+        buttons.push("Watch channel now")
+        actions.push("watch")
+    end if
+    if p.scheduled = true
+        buttons.push("Cancel recording")
+        actions.push("unschedule")
+    else
+        buttons.push("Record")
+        actions.push("record")
+    end if
+    buttons.push("Close")
+    actions.push("close")
+    d.buttons = buttons
+    d.addField("actions", "array", false)
+    d.addField("program", "assocarray", false)
+    d.actions = actions
+    d.program = p
+    d.observeField("buttonSelected", "onProgramMenu")
+    m.top.dialog = d
+end sub
+
+sub onProgramMenu(ev as Object)
+    d = ev.getRoSGNode()
+    d.close = true
+    idx = ev.getData()
+    if idx < 0 or idx >= d.actions.count() then return
+    action = d.actions[idx]
+    p = d.program
+    if action = "watch"
+        playChannel({ id: p.channel_id, name: p.channel_name })
+    else if action = "record"
+        api("/schedules", "scheduled_ok", "POST", FormatJson({ channel_id: p.channel_id, program_start: p.start }))
+    else if action = "unschedule"
+        api("/schedules/by-program?channel_id=" + txt(p.channel_id) + "&start=" + txt(p.start), "cancel_ok", "DELETE", "")
+    end if
+end sub
+
 sub onSportsChannel(ev as Object)
     idx = ev.getData()
     if idx < 0 or m.sportItems = invalid then return
@@ -864,7 +923,16 @@ sub trickMenu()
     if m.recordingId < 0 then return
     d = CreateObject("roSGNode", "Dialog")
     d.title = m.playTitle
-    d.message = "OK: select   Back: close"
+    posn = m.video.position
+    dur = m.video.duration
+    info = "OK: select   Back: close"
+    if posn <> invalid
+        info = "Position " + fmtDuration(posn)
+        if dur <> invalid and dur > 0 then info = info + " / " + fmtDuration(dur)
+        if m.isLive then info = info + "   (live buffer)"
+        info = info + Chr(10) + "OK: select   Back: close"
+    end if
+    d.message = info
     if m.video.state = "paused"
         buttons = ["Play", "Back 30s", "Forward 30s", "Jump to live", "Keep recording"]
         actions = ["play", "back30", "fwd30", "live", "keep"]
@@ -1081,17 +1149,32 @@ sub onApiResponse(ev as Object)
         if n = 0 and m.gridFilter = "favorites=1"
             m.detail.text = "No favorites yet. Open Guide, Categories or Search, highlight a channel and press * to star it."
         end if
-    else if tag = "channels"
+    else if tag = "search" or tag = "channels"
         if m.mode <> "list" then return
         labels = []
-        for each ch in r.items
-            star = "     "
-            if ch.favorite = 1 then star = "*   "
-            line = star + txt(ch.num) + "   " + txt(ch.name)
-            if ch.now <> invalid then line = line + "   -   " + txt(ch.now.title)
-            labels.push(line)
-        end for
-        setRows(labels, r.items, "No channels match '" + m.lastQuery + "'. Only channels in enabled groups are searched (Pi Settings > Channel groups).")
+        items = []
+        chans = r.items
+        if chans = invalid then chans = r.channels
+        if chans <> invalid
+            for each ch in chans
+                star = "     "
+                if ch.favorite = 1 then star = "*   "
+                line = star + txt(ch.num) + "   " + txt(ch.name)
+                if ch.now <> invalid then line = line + "   -   " + txt(ch.now.title)
+                labels.push(line)
+                items.push({ kind: "channel", ch: ch })
+            end for
+        end if
+        if r.programs <> invalid
+            for each p in r.programs
+                tagTxt = ""
+                if p.now_playing = true then tagTxt = "   [ON NOW]"
+                if p.scheduled = true then tagTxt = tagTxt + "   [REC]"
+                labels.push("TV   " + txt(p.title) + "   " + fmtDay(p.start) + " " + fmtTime(p.start) + "   (" + txt(p.channel_name) + ")" + tagTxt)
+                items.push({ kind: "program", p: p })
+            end for
+        end if
+        setRows(labels, items, "Nothing matches '" + m.lastQuery + "'. Channels and show titles/descriptions are searched.")
         m.hint.text = "OK: watch / record / favorite   *: star   Left: menu"
         if m.focusResults and labels.count() > 0 and m.top.dialog = invalid then m.content.setFocus(true)
         m.focusResults = false
@@ -1115,6 +1198,12 @@ sub onApiResponse(ev as Object)
             tagTxt = ""
             if rec.status = "recording" then tagTxt = "  [RECORDING]"
             if rec.status = "failed" then tagTxt = "  [FAILED]"
+            saved = readResumePos(rec.id)
+            if rec.status <> "recording" and saved > 5 and rec.duration <> invalid and rec.duration > 0
+                pct = Int(saved / rec.duration * 100)
+                if pct > 100 then pct = 100
+                tagTxt = tagTxt + "   " + pct.toStr() + "% watched"
+            end if
             labels.push(fmtDay(rec.start) + " " + fmtTime(rec.start) + "   " + txt(rec.title) + "   (" + fmtDuration(rec.duration) + ", " + txt(rec.channel_name) + ", " + fmtSize(rec.size_bytes) + ")" + tagTxt)
         end for
         setRows(labels, r.items, "No recordings yet. Pick a show in the Guide and choose Record.")
@@ -1136,7 +1225,7 @@ sub onApiResponse(ev as Object)
         if m.mode = "scheduled" then api("/schedules", "schedules")
     else if tag = "fav_ok"
         if m.mode = "grid" then loadGrid()
-        if m.mode = "list" then api("/channels?q=" + urlEnc(m.lastQuery), "channels")
+        if m.mode = "list" then api("/search?q=" + urlEnc(m.lastQuery), "search")
     else if tag = "delete_ok"
         toast("Deleted")
         api("/recordings", "recordings")

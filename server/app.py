@@ -121,6 +121,43 @@ def api_channels():
     return jsonify(out)
 
 
+@app.get("/api/search")
+def api_search():
+    """YouTube-TV-style search: matches channel names AND program titles/descriptions.
+    Programs cover the current show and the next 24 h so upcoming airings can be recorded."""
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"channels": [], "programs": []})
+    now = _now()
+    where, args = _channel_filter()
+    like = "%" + q + "%"
+
+    chans = db.rows(f"SELECT * FROM channels {where} AND name LIKE ? ORDER BY favorite DESC, num, name LIMIT 40",
+                    args + [like])
+    cur, nxt = _now_next_all(now)
+    ch_out = []
+    for ch in chans:
+        cj = _channel_json(ch)
+        cj["now"] = cur.get(ch["tvg_id"])
+        cj["next"] = nxt.get(ch["tvg_id"])
+        ch_out.append(cj)
+
+    scheduled = {(s["channel_id"], s["start"]) for s in db.rows(
+        "SELECT channel_id, start FROM schedules WHERE status IN ('scheduled','recording')")}
+    progs = db.rows(
+        "SELECT p.tvg_id, p.start, p.stop, p.title, p.description, "
+        "c.id AS channel_id, c.name AS channel_name, c.num AS num, c.logo AS logo "
+        "FROM programs p JOIN channels c ON c.tvg_id = p.tvg_id "
+        "WHERE c.grp IN (SELECT name FROM groups WHERE enabled=1) "
+        "AND (p.title LIKE ? OR p.description LIKE ?) AND p.stop > ? AND p.start < ? "
+        "ORDER BY p.start LIMIT 60",
+        (like, like, now - 3600, now + 24 * 3600))
+    for p in progs:
+        p["scheduled"] = (p["channel_id"], p["start"]) in scheduled
+        p["now_playing"] = p["start"] <= now and p["stop"] > now
+    return jsonify({"channels": ch_out, "programs": progs})
+
+
 @app.get("/api/groups")
 def api_groups():
     return jsonify(db.rows("SELECT name, enabled, count FROM groups ORDER BY name"))
