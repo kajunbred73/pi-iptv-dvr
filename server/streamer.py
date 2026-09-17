@@ -288,6 +288,41 @@ class Recorder:
                 return rid
         return None
 
+    def reuse_timeshift(self, rid, stop):
+        """Restart a stopped live buffer in place: same recordings row and folder, so flipping
+        back to a channel doesn't pile up duplicate entries for the same show."""
+        rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,))
+        if not rec or rec["status"] == "recording":
+            return None
+        ch = db.row("SELECT * FROM channels WHERE id=?", (rec["channel_id"],))
+        if not ch:
+            return None
+        now = int(time.time())
+        out_dir = os.path.join(config.get("recordings_dir"), rec["path"])
+        shutil.rmtree(out_dir, ignore_errors=True)
+        os.makedirs(out_dir, exist_ok=True)
+        playlist = os.path.join(out_dir, "index.m3u8")
+        duration = max(60, stop - now)
+        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args() + [
+            "-t", str(duration),
+            "-f", "hls", "-hls_time", "3", "-hls_list_size", "0",
+            "-hls_playlist_type", "event",
+            "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
+            playlist,
+        ]
+        sid = db.execute(
+            "INSERT INTO schedules(channel_id,title,start,stop,status,created,recording_id) VALUES(?,?,?,?,'recording',?,?)",
+            (rec["channel_id"], rec["title"], now, stop, now, rid))
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                stderr=open(os.path.join(out_dir, "ffmpeg.log"), "ab"))
+        with self.lock:
+            self.active[sid] = (proc, rid)
+            self.timeshift[rid] = {"sid": sid, "touch": now, "keep": False}
+        db.execute("UPDATE recordings SET status='recording', start=?, stop=?, size_bytes=0 WHERE id=?",
+                   (now, stop, rid))
+        log.info("timeshift restart in place rec=%s", rid)
+        return rid
+
     def touch_timeshift(self, rid):
         with self.lock:
             t = self.timeshift.get(rid)

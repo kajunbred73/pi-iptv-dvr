@@ -275,12 +275,22 @@ def api_timeshift():
     # Rejoin a live buffer that is still running for this channel (instant re-tune).
     rid = streamer.recorder.active_timeshift(cid)
     if rid is None:
+        # Same show still airing on this channel and its old buffer exists: restart that
+        # recording in place instead of adding another duplicate row.
+        old = db.row(
+            "SELECT r.id FROM recordings r JOIN schedules s ON s.recording_id = r.id "
+            "WHERE r.channel_id=? AND r.title=? AND s.stop=? AND r.status IN ('done','failed') "
+            "ORDER BY r.id DESC LIMIT 1",
+            (cid, f"[timeshift] {title}", stop))
         # Single viewer: changing channel abandons the previous (un-kept) live buffer right
         # away instead of letting several ffmpegs pile up on the Pi.
         streamer.recorder.stop_other_timeshifts()
         if len(streamer.recorder.active) >= 4:
             return jsonify({"ok": False, "error": "Too many recordings in progress"}), 503
-        rid = streamer.recorder.start_now(cid, start, stop, title)
+        if old:
+            rid = streamer.recorder.reuse_timeshift(old["id"], stop)
+        if rid is None:
+            rid = streamer.recorder.start_now(cid, start, stop, title)
     else:
         streamer.recorder.touch_timeshift(rid)
     return jsonify({
