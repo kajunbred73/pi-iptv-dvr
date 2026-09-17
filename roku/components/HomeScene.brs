@@ -47,6 +47,7 @@ sub init()
     m.guideOverlay = false
     m.focusResults = false
     m.teams = []
+    m.sportItems = []
     m.pendingTeam = ""
     m.retryCount = 0
     m.retrying = false
@@ -841,6 +842,16 @@ sub onResumeDialog(ev as Object)
     play(m.resumeUrl, m.resumeTitle, m.resumeLive, startPos)
 end sub
 
+sub onSportsChannel(ev as Object)
+    idx = ev.getData()
+    if idx < 0 or m.sportItems = invalid then return
+    if idx < m.sportItems.count()
+        m.pendingChannel = m.sportItems[idx]
+        m.top.dialog = invalid
+        playChannel(m.sportItems[idx])
+    end if
+end sub
+
 sub playChannel(ch as Object)
     m.pendingChannel = ch
     m.recordingId = -1
@@ -1133,8 +1144,25 @@ sub onApiResponse(ev as Object)
         hideLoading()
         if r.items = invalid or r.items.count() = 0
             toast("No live game found for " + txt(m.pendingTeam))
-        else
+        else if r.items.count() = 1
             playChannel(r.items[0])
+        else
+            m.sportItems = r.items
+            d = CreateObject("roSGNode", "Dialog")
+            d.title = "Select channel playing " + txt(m.pendingTeam)
+            d.message = "Pick one of the channels below:"
+            labels = []
+            for each ch in r.items
+                line = txt(ch.num) + " " + txt(ch.name)
+                if ch.now <> invalid and ch.now.title <> invalid
+                    line = line + " - " + txt(ch.now.title)
+                end if
+                labels.push(line)
+            end for
+            d.buttons = labels
+            d.observeField("buttonSelected", "onSportsChannel")
+            m.top.dialog = d
+            d.setFocus(true)
         end if
     else if tag = "refresh"
         if r.started = true then toast("Import started on server; it may take a few minutes") else toast("Import already running")
