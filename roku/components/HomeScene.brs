@@ -721,7 +721,11 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     else
         showLoading("Buffering...")
     end if
-    m.video.control = "stop"
+    ' Only stop if something is actually playing; calling "stop" on an idle Video can fire
+    ' a stray "finished" state that hits the retry path before the new content is loaded.
+    if m.video.visible and (m.video.state = "playing" or m.video.state = "paused" or m.video.state = "buffering")
+        m.video.control = "stop"
+    end if
     c = CreateObject("roSGNode", "ContentNode")
     c.url = url
     c.title = title
