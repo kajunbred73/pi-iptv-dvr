@@ -10,6 +10,7 @@ sub init()
     m.hint = m.top.findNode("hint")
     m.status = m.top.findNode("status")
     m.video = m.top.findNode("video")
+    m.playFocus = m.top.findNode("playFocus")
     m.video.enableUI = false
     m.readyTimer = m.top.findNode("readyTimer")
     m.readyTimer.observeField("fire", "onReadyCheck")
@@ -281,7 +282,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 10"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 11"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -992,10 +993,11 @@ sub onTrickMenu(ev as Object)
     focusVideo()
 end sub
 
-' Keep focus on the scene (not the Video node) during playback: a focused Video node
-' handles OK/FF/RW/play itself and shows the firmware info bar, so onKeyEvent never sees them.
+' During playback focus an empty Group instead of the Video node (which would handle
+' OK/FF/RW/play itself and show the firmware info bar) or the hidden guide grid (which
+' would eat OK/Up). Keys bubble from the Group straight to onKeyEvent.
 sub focusVideo()
-    m.top.setFocus(true)
+    m.playFocus.setFocus(true)
 end sub
 
 sub stopVideo(clearResume = false)
