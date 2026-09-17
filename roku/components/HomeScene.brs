@@ -281,7 +281,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 9"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 10"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -504,7 +504,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
                 else
                     m.top.dialog.close = true
                     m.top.dialog = invalid
-                    m.video.setFocus(true)
+                    focusVideo()
                 end if
                 return true
             end if
@@ -761,7 +761,7 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.video.content = c
     m.video.loop = false
     m.video.visible = true
-    m.video.setFocus(true)
+    focusVideo()
     m.video.control = "play"
     m.playTimer.control = "start"
 end sub
@@ -834,7 +834,7 @@ sub hideGuideOverlay()
     m.grid.visible = false
     m.grid.translation = [470, 170]
     m.grid.scale = [1, 1]
-    m.video.setFocus(true)
+    focusVideo()
     m.hint.text = "OK/Down: playback controls   Up: guide   Back: stop"
 end sub
 
@@ -989,7 +989,13 @@ sub onTrickMenu(ev as Object)
             api("/timeshift/" + d.recordingId.toStr() + "/keep", "keep", "POST", "")
         end if
     end if
-    m.video.setFocus(true)
+    focusVideo()
+end sub
+
+' Keep focus on the scene (not the Video node) during playback: a focused Video node
+' handles OK/FF/RW/play itself and shows the firmware info bar, so onKeyEvent never sees them.
+sub focusVideo()
+    m.top.setFocus(true)
 end sub
 
 sub stopVideo(clearResume = false)
@@ -1032,7 +1038,7 @@ sub onVideoState()
     if st = "playing"
         hideLoading()
         m.playTimer.control = "stop"
-        m.video.setFocus(true)
+        focusVideo()
         if not m.isLive and m.startPos > 0
             m.video.seek = m.startPos
             m.startPos = 0
