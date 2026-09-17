@@ -957,7 +957,11 @@ sub onVideoState()
             m.retryCount = m.retryCount + 1
             m.retryTimer.control = "start"
         else
-            stopVideo(true)
+            if m.isLive
+                playError("The live buffer ended before playback started.")
+            else
+                stopVideo(true)
+            end if
         end if
     end if
 end sub
