@@ -1043,7 +1043,7 @@ sub onApiResponse(ev as Object)
         if txt(r.status) = "recording" or (r.ready = true)
             m.video.control = "play"
         else
-            stopVideo(true)
+            playError("The Pi stopped this channel's recording (" + txt(r.status) + "). " + txt(r.error))
         end if
     else if tag = "touch"
         ' heartbeat; nothing to do
