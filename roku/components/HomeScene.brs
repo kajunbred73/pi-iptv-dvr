@@ -281,7 +281,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 9"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 10"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -1143,6 +1143,15 @@ sub onApiResponse(ev as Object)
     else if tag = "rejoin"
         if not m.video.visible then return
         if txt(r.status) = "recording" or (r.ready = true)
+            ' The player reached the end of the growing playlist (state=finished). Plain
+            ' control="play" does nothing on a finished node - reload the content so the
+            ' player re-reads the playlist and rejoins at the live edge.
+            c = CreateObject("roSGNode", "ContentNode")
+            c.url = m.streamUrl
+            c.title = m.playTitle
+            c.streamFormat = "hls"
+            c.live = m.isLive
+            m.video.content = c
             m.video.control = "play"
         else
             playError("The Pi stopped this channel's recording (" + txt(r.status) + "). " + txt(r.error))
