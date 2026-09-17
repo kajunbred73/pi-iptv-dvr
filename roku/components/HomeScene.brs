@@ -512,6 +512,20 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
         else if key = "down" or key = "OK"
             if m.top.dialog = invalid and not m.guideOverlay then trickMenu()
             return true
+        else if key = "play" or key = "pause" or key = "playpause"
+            if m.video.state = "paused" then m.video.control = "resume" else m.video.control = "pause"
+            return true
+        else if key = "fastforward"
+            p = m.video.position + 30
+            dur = m.video.duration
+            if dur <> invalid and dur > 0 and p > dur - 10 then p = dur - 10
+            if p > 0 then m.video.seek = p
+            return true
+        else if key = "rewind"
+            p = m.video.position - 30
+            if p < 0 then p = 0
+            m.video.seek = p
+            return true
         else if key = "up"
             if m.top.dialog = invalid and not m.guideOverlay
                 showGuideOverlay()
