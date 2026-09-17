@@ -282,7 +282,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 11"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 12"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -767,6 +767,24 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.playTimer.control = "start"
 end sub
 
+' Reload the live playlist and rejoin at the live edge. A fresh ContentNode is required:
+' "play" on a Video that has finished replays the manifest it already has instead of
+' fetching the (now longer) one from the Pi.
+sub rejoinLive()
+    if m.video.state = "playing" or m.video.state = "paused" or m.video.state = "buffering"
+        m.video.control = "stop"
+    end if
+    c = CreateObject("roSGNode", "ContentNode")
+    c.url = m.streamUrl
+    c.title = m.playTitle
+    c.streamFormat = "hls"
+    c.live = true
+    m.video.content = c
+    m.video.visible = true
+    focusVideo()
+    m.video.control = "play"
+end sub
+
 ' Something went wrong starting/playing video: stop and tell the user why (a toast is hidden
 ' behind the loading box, so use a real dialog).
 sub playError(msg as String)
@@ -983,8 +1001,7 @@ sub onTrickMenu(ev as Object)
     else if action = "fwd30"
         m.video.seek = m.video.position + 30
     else if action = "live"
-        ' Reloading the live playlist puts the player back at the live edge.
-        m.video.control = "play"
+        rejoinLive()
     else if action = "keep"
         if d.recordingId > 0
             api("/timeshift/" + d.recordingId.toStr() + "/keep", "keep", "POST", "")
@@ -1151,7 +1168,7 @@ sub onApiResponse(ev as Object)
     else if tag = "rejoin"
         if not m.video.visible then return
         if txt(r.status) = "recording" or (r.ready = true)
-            m.video.control = "play"
+            rejoinLive()
         else
             playError("The Pi stopped this channel's recording (" + txt(r.status) + "). " + txt(r.error))
         end if
