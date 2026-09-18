@@ -286,7 +286,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 15"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 16"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -856,7 +856,7 @@ sub showGuideOverlay()
     m.video.width = 960
     m.video.height = 1080
     m.grid.visible = true
-    m.grid.translation = [24, 110]
+    m.grid.translation = [40, 110]
     m.grid.scale = [0.66, 0.66]
     m.grid.setFocus(true)
     m.hint.text = "OK: menu   Back: close guide"

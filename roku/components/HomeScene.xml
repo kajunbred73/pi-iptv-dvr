@@ -14,7 +14,7 @@
     <Rectangle id="guideCover" width="960" height="1080" color="#0D1117" visible="false" />
     <GuideGrid id="grid" translation="[470,170]" visible="false" />
     <Rectangle id="guideInfoBg" translation="[0,664]" width="960" height="170" color="#141B24" visible="false" />
-    <Label id="guideInfo" translation="[24,676]" width="912" height="146" wrap="true" maxLines="5" font="font:SmallSystemFont" color="#E8EEF4" visible="false" />
+    <Label id="guideInfo" translation="[40,676]" width="896" height="146" wrap="true" maxLines="5" font="font:SmallSystemFont" color="#E8EEF4" visible="false" />
     <Label id="empty" translation="[470,200]" width="1390" wrap="true" font="font:MediumSystemFont" color="#66707A" visible="false" />
 
     <Rectangle id="detailBg" translation="[470,950]" width="1390" height="90" color="#161C22" />
