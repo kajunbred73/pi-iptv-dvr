@@ -10,6 +10,7 @@ sub init()
     m.hint = m.top.findNode("hint")
     m.status = m.top.findNode("status")
     m.video = m.top.findNode("video")
+    m.playFocus = m.top.findNode("playFocus")
     m.video.enableUI = false
     m.readyTimer = m.top.findNode("readyTimer")
     m.readyTimer.observeField("fire", "onReadyCheck")
@@ -281,7 +282,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 10"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 12"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -504,7 +505,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
                 else
                     m.top.dialog.close = true
                     m.top.dialog = invalid
-                    m.video.setFocus(true)
+                    focusVideo()
                 end if
                 return true
             end if
@@ -761,9 +762,27 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.video.content = c
     m.video.loop = false
     m.video.visible = true
-    m.video.setFocus(true)
+    focusVideo()
     m.video.control = "play"
     m.playTimer.control = "start"
+end sub
+
+' Reload the live playlist and rejoin at the live edge. A fresh ContentNode is required:
+' "play" on a Video that has finished replays the manifest it already has instead of
+' fetching the (now longer) one from the Pi.
+sub rejoinLive()
+    if m.video.state = "playing" or m.video.state = "paused" or m.video.state = "buffering"
+        m.video.control = "stop"
+    end if
+    c = CreateObject("roSGNode", "ContentNode")
+    c.url = m.streamUrl
+    c.title = m.playTitle
+    c.streamFormat = "hls"
+    c.live = true
+    m.video.content = c
+    m.video.visible = true
+    focusVideo()
+    m.video.control = "play"
 end sub
 
 ' Something went wrong starting/playing video: stop and tell the user why (a toast is hidden
@@ -834,7 +853,7 @@ sub hideGuideOverlay()
     m.grid.visible = false
     m.grid.translation = [470, 170]
     m.grid.scale = [1, 1]
-    m.video.setFocus(true)
+    focusVideo()
     m.hint.text = "OK/Down: playback controls   Up: guide   Back: stop"
 end sub
 
@@ -982,14 +1001,20 @@ sub onTrickMenu(ev as Object)
     else if action = "fwd30"
         m.video.seek = m.video.position + 30
     else if action = "live"
-        ' Reloading the live playlist puts the player back at the live edge.
-        m.video.control = "play"
+        rejoinLive()
     else if action = "keep"
         if d.recordingId > 0
             api("/timeshift/" + d.recordingId.toStr() + "/keep", "keep", "POST", "")
         end if
     end if
-    m.video.setFocus(true)
+    focusVideo()
+end sub
+
+' During playback focus an empty Group instead of the Video node (which would handle
+' OK/FF/RW/play itself and show the firmware info bar) or the hidden guide grid (which
+' would eat OK/Up). Keys bubble from the Group straight to onKeyEvent.
+sub focusVideo()
+    m.playFocus.setFocus(true)
 end sub
 
 sub stopVideo(clearResume = false)
@@ -1032,7 +1057,7 @@ sub onVideoState()
     if st = "playing"
         hideLoading()
         m.playTimer.control = "stop"
-        m.video.setFocus(true)
+        focusVideo()
         if not m.isLive and m.startPos > 0
             m.video.seek = m.startPos
             m.startPos = 0
@@ -1143,16 +1168,7 @@ sub onApiResponse(ev as Object)
     else if tag = "rejoin"
         if not m.video.visible then return
         if txt(r.status) = "recording" or (r.ready = true)
-            ' The player reached the end of the growing playlist (state=finished). Plain
-            ' control="play" does nothing on a finished node - reload the content so the
-            ' player re-reads the playlist and rejoins at the live edge.
-            c = CreateObject("roSGNode", "ContentNode")
-            c.url = m.streamUrl
-            c.title = m.playTitle
-            c.streamFormat = "hls"
-            c.live = m.isLive
-            m.video.content = c
-            m.video.control = "play"
+            rejoinLive()
         else
             playError("The Pi stopped this channel's recording (" + txt(r.status) + "). " + txt(r.error))
         end if
