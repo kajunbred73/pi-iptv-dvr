@@ -291,7 +291,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 18"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 19"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -888,7 +888,7 @@ sub buildMenuBar()
     m.barSel.height = 3
     m.barSel.color = "#3D6BFF"
     m.menuBar.appendChild(m.barSel)
-    widths = [104, 76, 84, 120, 120, 116, 104, 88]
+    widths = [130, 85, 95, 140, 150, 140, 125, 110]
     x = 0
     for i = 0 to m.tabs.count() - 1
         w = 100
@@ -908,10 +908,15 @@ sub buildMenuBar()
 end sub
 
 sub updateMenuBar()
+    scroll = 0
+    ' scroll the bar so the focused label stays inside the ~900px window
     for i = 0 to m.barLabels.count() - 1
         l = m.barLabels[i]
         if i = m.barFocus
             l.color = "#FFFFFF"
+            lx = l.translation[0]
+            if lx + l.width - scroll > 900 then scroll = lx + l.width - 900
+            if lx - scroll < 0 then scroll = lx
         else
             l.color = "#8894A0"
         end if
@@ -920,6 +925,7 @@ sub updateMenuBar()
             m.barSel.width = l.width
         end if
     end for
+    m.menuBar.translation = [40 - scroll, 56]
 end sub
 
 ' Show the chosen tab's pane in the left half of the overlay while playback continues.
