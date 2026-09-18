@@ -216,8 +216,9 @@ sub updateDetail()
         return
     end if
     pr = progs[m.focusCol]
-    txt = fmtTime(pr.start) + " - " + fmtTime(pr["stop"]) + "   " + pr.title
+    txt = ch.name + "  |  " + fmtTime(pr.start) + " - " + fmtTime(pr["stop"]) + "   " + pr.title
     if pr.scheduled = true then txt = txt + "   (recording scheduled)"
+    if pr.description <> invalid and pr.description <> "" then txt = txt + Chr(10) + pr.description
     m.top.detail = txt
 end sub
 

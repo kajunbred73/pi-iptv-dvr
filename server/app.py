@@ -209,7 +209,7 @@ def api_guide():
     ids = {c["tvg_id"] for c in chans if c["tvg_id"]}
     progs = {}
     if ids:
-        for p in db.rows("SELECT tvg_id,start,stop,title FROM programs WHERE stop>? AND start<? ORDER BY start", (start, end)):
+        for p in db.rows("SELECT tvg_id,start,stop,title,description FROM programs WHERE stop>? AND start<? ORDER BY start", (start, end)):
             if p["tvg_id"] in ids:
                 progs.setdefault(p["tvg_id"], []).append(p)
     scheduled = {(s["channel_id"], s["start"]) for s in db.rows(

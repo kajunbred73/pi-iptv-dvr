@@ -5,6 +5,8 @@ sub init()
     m.content = m.top.findNode("content")
     m.grid = m.top.findNode("grid")
     m.guideCover = m.top.findNode("guideCover")
+    m.guideInfo = m.top.findNode("guideInfo")
+    m.guideInfoBg = m.top.findNode("guideInfoBg")
     m.detailBg = m.top.findNode("detailBg")
     m.heading = m.top.findNode("heading")
     m.detail = m.top.findNode("detail")
@@ -284,7 +286,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 14"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 15"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -416,7 +418,11 @@ sub onGridBack()
 end sub
 
 sub onGridDetail()
-    if m.mode = "grid" then m.detail.text = m.grid.detail
+    if m.guideOverlay
+        m.guideInfo.text = m.grid.detail
+    else if m.mode = "grid"
+        m.detail.text = m.grid.detail
+    end if
 end sub
 
 ' Options for a channel (+ optionally the highlighted program)
@@ -843,6 +849,9 @@ sub showGuideOverlay()
     m.empty.visible = false
     m.detail.visible = false
     m.detailBg.visible = false
+    m.guideInfoBg.visible = true
+    m.guideInfo.visible = true
+    m.guideInfo.text = txt(m.grid.detail)
     m.video.translation = [960, 0]
     m.video.width = 960
     m.video.height = 1080
@@ -856,6 +865,8 @@ end sub
 sub hideGuideOverlay()
     m.guideOverlay = false
     m.guideCover.visible = false
+    m.guideInfo.visible = false
+    m.guideInfoBg.visible = false
     m.content.visible = (m.mode <> "grid")
     m.detail.visible = true
     m.detailBg.visible = true
@@ -1051,6 +1062,8 @@ sub stopVideo(clearResume = false)
     if m.guideOverlay
         m.guideOverlay = false
         m.guideCover.visible = false
+        m.guideInfo.visible = false
+        m.guideInfoBg.visible = false
         m.content.visible = (m.mode <> "grid")
         m.detail.visible = true
         m.detailBg.visible = true
