@@ -360,6 +360,9 @@ def api_recordings():
     now = _now()
     for r in db.rows("SELECT * FROM recordings ORDER BY start DESC"):
         r["stream_url"] = f"{_base_url()}/recordings/{r['id']}/index.m3u8"
+        # Show timeshift buffers under the show name; the prefix stays in the DB for detection.
+        if r["title"].startswith("[timeshift]"):
+            r["title"] = r["title"][len("[timeshift]") :].lstrip()
         if r["status"] == "recording":
             r["duration"] = now - r["start"]
         else:
