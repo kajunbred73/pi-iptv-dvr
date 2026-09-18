@@ -18,7 +18,7 @@
     <Label id="detail" translation="[490,960]" width="1350" height="70" wrap="true" maxLines="2" font="font:SmallestSystemFont" color="#AAB4BE" />
     <Label id="hint" translation="[60,960]" width="340" height="80" wrap="true" font="font:SmallestSystemFont" color="#66707A" />
 
-    <Video id="video" width="1920" height="1080" visible="false" enableUI="false" />
+    <Video id="video" width="1920" height="1080" visible="false" enableUI="true" />
     <Group id="playFocus" />
     <Timer id="readyTimer" repeat="true" duration="1" />
     <Timer id="retryTimer" repeat="false" duration="3" />
