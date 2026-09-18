@@ -4,6 +4,8 @@ sub init()
     m.menu = m.top.findNode("menu")
     m.content = m.top.findNode("content")
     m.grid = m.top.findNode("grid")
+    m.guideCover = m.top.findNode("guideCover")
+    m.detailBg = m.top.findNode("detailBg")
     m.heading = m.top.findNode("heading")
     m.detail = m.top.findNode("detail")
     m.empty = m.top.findNode("empty")
@@ -282,7 +284,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 13"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 14"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -835,18 +837,28 @@ end sub
 sub showGuideOverlay()
     m.guideOverlay = true
     if m.grid.data = invalid then loadGrid()
+    ' Solid cover so the list/detail rows underneath don't bleed through the grid gaps.
+    m.guideCover.visible = true
+    m.content.visible = false
+    m.empty.visible = false
+    m.detail.visible = false
+    m.detailBg.visible = false
     m.video.translation = [960, 0]
     m.video.width = 960
     m.video.height = 1080
     m.grid.visible = true
-    m.grid.translation = [20, 120]
-    m.grid.scale = [0.55, 0.55]
+    m.grid.translation = [24, 110]
+    m.grid.scale = [0.66, 0.66]
     m.grid.setFocus(true)
     m.hint.text = "OK: menu   Back: close guide"
 end sub
 
 sub hideGuideOverlay()
     m.guideOverlay = false
+    m.guideCover.visible = false
+    m.content.visible = (m.mode <> "grid")
+    m.detail.visible = true
+    m.detailBg.visible = true
     m.video.translation = [0, 0]
     m.video.width = 1920
     m.video.height = 1080
@@ -1038,6 +1050,10 @@ sub stopVideo(clearResume = false)
     m.video.visible = false
     if m.guideOverlay
         m.guideOverlay = false
+        m.guideCover.visible = false
+        m.content.visible = (m.mode <> "grid")
+        m.detail.visible = true
+        m.detailBg.visible = true
         m.video.translation = [0, 0]
         m.video.width = 1920
         m.video.height = 1080
