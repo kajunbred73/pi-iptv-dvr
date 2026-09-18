@@ -8,6 +8,7 @@ sub init()
     m.guideInfo = m.top.findNode("guideInfo")
     m.guideInfoBg = m.top.findNode("guideInfoBg")
     m.detailBg = m.top.findNode("detailBg")
+    m.menuBar = m.top.findNode("menuBar")
     m.heading = m.top.findNode("heading")
     m.detail = m.top.findNode("detail")
     m.empty = m.top.findNode("empty")
@@ -51,6 +52,10 @@ sub init()
     m.isLive = false
     m.startPos = 0
     m.guideOverlay = false
+    m.overlayFocus = "pane"   ' pane | menubar (when the guide overlay is up)
+    m.overlayTab = 1          ' index into m.tabs; 1 = Guide
+    m.barFocus = 1
+    m.barLabels = []
     m.focusResults = false
     m.teams = []
     m.sportItems = []
@@ -286,7 +291,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 17"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 18"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -317,9 +322,12 @@ sub onContentFocused()
     else
         m.detail.text = ""
     end if
+    ' Overlay: list rows show their details in the bottom panel instead of the hidden detail bar.
+    if m.guideOverlay then m.guideInfo.text = m.detail.text
 end sub
 
 sub onContentSelected()
+    if m.guideOverlay then hideGuideOverlay()
     i = m.content.itemSelected
     if i < 0 or i >= m.items.count() then return
     it = m.items[i]
@@ -506,6 +514,35 @@ end sub
 function onKeyEvent(key as String, press as Boolean) as Boolean
     if not press then return false
     if m.video.visible
+        if key = "back" and m.guideOverlay
+            hideGuideOverlay()
+            return true
+        end if
+        if m.guideOverlay and m.overlayFocus = "menubar"
+            if key = "left"
+                if m.barFocus > 0 then m.barFocus = m.barFocus - 1
+                updateMenuBar()
+                return true
+            else if key = "right"
+                if m.barFocus < m.tabs.count() - 1 then m.barFocus = m.barFocus + 1
+                updateMenuBar()
+                return true
+            else if key = "down"
+                m.overlayFocus = "pane"
+                tn = m.tabs[m.overlayTab]
+                if tn = "Guide" or tn = "Favorites" then m.grid.setFocus(true) else m.content.setFocus(true)
+                return true
+            else if key = "OK"
+                applyOverlayTab(m.barFocus)
+                return true
+            end if
+            return true
+        end if
+        if key = "left" and m.guideOverlay and m.content.hasFocus()
+            m.overlayFocus = "menubar"
+            m.menuBar.setFocus(true)
+            return true
+        end if
         if key = "back"
             if m.top.dialog <> invalid
                 if m.top.dialog.loading = true
@@ -539,6 +576,10 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
         else if key = "up"
             if m.top.dialog = invalid and not m.guideOverlay
                 showGuideOverlay()
+                return true
+            else if m.guideOverlay and m.overlayFocus = "pane"
+                m.overlayFocus = "menubar"
+                m.menuBar.setFocus(true)
                 return true
             end if
             return false
@@ -840,8 +881,103 @@ sub hideLoading()
     end if
 end sub
 
+' Horizontal tab bar across the top of the guide overlay (YouTube-TV-style top nav).
+sub buildMenuBar()
+    if m.menuBar.getChildCount() > 0 then return
+    m.barSel = CreateObject("roSGNode", "Rectangle")
+    m.barSel.height = 3
+    m.barSel.color = "#3D6BFF"
+    m.menuBar.appendChild(m.barSel)
+    widths = [104, 76, 84, 120, 120, 116, 104, 88]
+    x = 0
+    for i = 0 to m.tabs.count() - 1
+        w = 100
+        if i < widths.count() then w = widths[i]
+        l = CreateObject("roSGNode", "Label")
+        l.translation = [x, 0]
+        l.width = w
+        l.height = 46
+        l.text = m.tabs[i]
+        l.font = "font:SmallestSystemFont"
+        l.color = "#8894A0"
+        l.vertAlign = "center"
+        m.menuBar.appendChild(l)
+        m.barLabels.push(l)
+        x += w
+    end for
+end sub
+
+sub updateMenuBar()
+    for i = 0 to m.barLabels.count() - 1
+        l = m.barLabels[i]
+        if i = m.barFocus
+            l.color = "#FFFFFF"
+        else
+            l.color = "#8894A0"
+        end if
+        if i = m.overlayTab
+            m.barSel.translation = [l.translation[0], 44]
+            m.barSel.width = l.width
+        end if
+    end for
+end sub
+
+' Show the chosen tab's pane in the left half of the overlay while playback continues.
+sub applyOverlayTab(idx as Integer)
+    m.overlayTab = idx
+    tabName = m.tabs[idx]
+    m.overlayFocus = "pane"
+    updateMenuBar()
+    if tabName = "Guide" or tabName = "Favorites"
+        m.mode = "grid"
+        m.content.visible = false
+        m.grid.visible = true
+        m.gridFilter = ""
+        if tabName = "Favorites" then m.gridFilter = "favorites=1"
+        m.gridFrom = 0
+        loadGrid()
+        m.grid.setFocus(true)
+    else
+        m.grid.visible = false
+        m.content.visible = true
+        m.content.translation = [40, 150]
+        m.content.itemSize = [890, 56]
+        m.content.numRows = 8
+        if tabName = "Search"
+            m.mode = "list"
+            promptSearch()
+        else if tabName = "Categories"
+            m.mode = "categories"
+            api("/groups", "groups")
+            m.content.setFocus(true)
+        else if tabName = "Sports Teams"
+            m.mode = "teams"
+            loadTeams()
+            m.content.setFocus(true)
+        else if tabName = "Recordings"
+            m.mode = "recordings"
+            api("/recordings", "recordings")
+            m.content.setFocus(true)
+        else if tabName = "Scheduled"
+            m.mode = "scheduled"
+            api("/schedules", "schedules")
+            m.content.setFocus(true)
+        else if tabName = "Settings"
+            m.mode = "settings"
+            showSettings()
+            m.content.setFocus(true)
+        end if
+    end if
+end sub
+
 sub showGuideOverlay()
     m.guideOverlay = true
+    m.overlayFocus = "pane"
+    m.overlayTab = 1
+    if m.gridFilter = "favorites=1" then m.overlayTab = 0
+    m.barFocus = m.overlayTab
+    buildMenuBar()
+    updateMenuBar()
     if m.grid.data = invalid then loadGrid()
     ' Solid cover so the list/detail rows underneath don't bleed through the grid gaps.
     m.guideCover.visible = true
@@ -852,6 +988,7 @@ sub showGuideOverlay()
     m.guideInfoBg.visible = true
     m.guideInfo.visible = true
     m.guideInfo.text = txt(m.grid.detail)
+    m.menuBar.visible = true
     m.video.translation = [960, 0]
     m.video.width = 960
     m.video.height = 1080
@@ -864,9 +1001,14 @@ end sub
 
 sub hideGuideOverlay()
     m.guideOverlay = false
+    m.overlayFocus = "pane"
     m.guideCover.visible = false
     m.guideInfo.visible = false
     m.guideInfoBg.visible = false
+    m.menuBar.visible = false
+    m.content.translation = [470, 180]
+    m.content.itemSize = [1390, 58]
+    m.content.numRows = 13
     m.content.visible = (m.mode <> "grid")
     m.detail.visible = true
     m.detailBg.visible = true
@@ -1061,9 +1203,14 @@ sub stopVideo(clearResume = false)
     m.video.visible = false
     if m.guideOverlay
         m.guideOverlay = false
+        m.overlayFocus = "pane"
         m.guideCover.visible = false
         m.guideInfo.visible = false
         m.guideInfoBg.visible = false
+        m.menuBar.visible = false
+        m.content.translation = [470, 180]
+        m.content.itemSize = [1390, 58]
+        m.content.numRows = 13
         m.content.visible = (m.mode <> "grid")
         m.detail.visible = true
         m.detailBg.visible = true

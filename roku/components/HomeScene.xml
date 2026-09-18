@@ -15,6 +15,7 @@
     <GuideGrid id="grid" translation="[470,170]" visible="false" />
     <Rectangle id="guideInfoBg" translation="[0,664]" width="960" height="264" color="#141B24" visible="false" />
     <Label id="guideInfo" translation="[40,676]" width="896" height="240" wrap="true" maxLines="8" font="font:SmallSystemFont" color="#E8EEF4" visible="false" />
+    <Group id="menuBar" translation="[40,56]" visible="false" />
     <Label id="empty" translation="[470,200]" width="1390" wrap="true" font="font:MediumSystemFont" color="#66707A" visible="false" />
 
     <Rectangle id="detailBg" translation="[470,950]" width="1390" height="90" color="#161C22" />

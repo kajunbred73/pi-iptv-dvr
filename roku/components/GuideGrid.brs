@@ -250,8 +250,10 @@ function onKeyEvent(key as string, press as boolean) as boolean
             m.focusCol = colAtNow(m.top.focusRow)
             clampScroll()
             render()
+            return true
         end if
-        return true
+        ' at the top row let Up bubble so the scene can focus the overlay menu bar
+        return false
     else if key = "right"
         progs = m.chans[m.top.focusRow].programs
         if progs <> invalid and m.focusCol < progs.count() - 1
