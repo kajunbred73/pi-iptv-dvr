@@ -62,6 +62,7 @@ sub init()
     m.pendingTeam = ""
     m.retryCount = 0
     m.retrying = false
+    m.finishPos = 0
     m.readyAttempts = 0
     m.resumeRecordingId = -1
     m.resumeUrl = ""
@@ -291,7 +292,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 19"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 20"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -791,6 +792,7 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.startPos = startPos
     m.retryCount = 0
     m.retrying = false
+    m.finishPos = 0
     m.readyTimer.control = "stop"
     m.retryTimer.control = "stop"
     if m.top.dialog <> invalid and m.top.dialog.loading = true
@@ -828,6 +830,9 @@ sub rejoinLive()
     c.title = m.playTitle
     c.streamFormat = "hls"
     c.live = true
+    ' Resume a couple of seconds behind where playback ran out so we don't re-finish
+    ' instantly; ignored on a true live playlist (player joins at the live edge).
+    if m.finishPos > 4 then c.playStart = m.finishPos - 3
     m.video.content = c
     m.video.visible = true
     focusVideo()
@@ -1256,10 +1261,11 @@ sub onVideoState()
         end if
     else if st = "finished"
         ' A live buffer only really ends when the Pi writes ENDLIST; if the player ran off the
-        ' end of the growing playlist, rejoin at the live edge instead of stopping/looping.
-        if m.recordingId >= 0 and m.isLive and m.retryCount < 5 and not m.retrying
+        ' end of the growing playlist, rejoin once the buffer has grown instead of stopping.
+        if m.recordingId >= 0 and m.isLive and m.retryCount < 15 and not m.retrying
             m.retrying = true
             m.retryCount = m.retryCount + 1
+            if m.video.position <> invalid then m.finishPos = m.video.position
             m.retryTimer.control = "start"
         else
             if m.isLive
@@ -1350,7 +1356,14 @@ sub onApiResponse(ev as Object)
     else if tag = "rejoin"
         if not m.video.visible then return
         if txt(r.status) = "recording" or (r.ready = true)
-            rejoinLive()
+            ' Only reload once the buffer actually grew past where we stopped (~2+ new
+            ' segments); reloading immediately just re-finished and burned the retries.
+            if (r.segments * 3.0) > m.finishPos + 6
+                rejoinLive()
+            else
+                m.retrying = true
+                m.retryTimer.control = "start"
+            end if
         else
             playError("The Pi stopped this channel's recording (" + txt(r.status) + "). " + txt(r.error))
         end if
