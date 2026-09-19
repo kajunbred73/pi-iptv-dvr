@@ -6,10 +6,11 @@ Run from the repo root on the Pi:
     python3 scripts/diagnose_channel.py "FOX 26" "TV One"
 
 Each argument is a name filter (case-insensitive substring). With no arguments it
-lists the 15 most recently created recordings instead. Prints channel DB info,
-an ffprobe of the stream URL, and the ffmpeg log + playlist state for the newest
-recording folders so the output can be screenshotted/emailed back.
+just inspects the 3 most recent recordings. Prints channel DB info, an ffprobe of
+the stream URL, and the ffmpeg log + playlist state for the newest recording
+folders so the output can be screenshotted/emailed back.
 """
+import json
 import os
 import sqlite3
 import subprocess
@@ -17,8 +18,17 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB = os.path.join(ROOT, "server", "data", "dvr.db")
-REC_DIR = os.path.join(ROOT, "server", "data", "recordings")
+DATA_DIR = os.environ.get("IPTV_DATA_DIR", os.path.join(ROOT, "server", "data"))
+DB = os.path.join(DATA_DIR, "iptv.db")
+REC_DIR = os.path.join(DATA_DIR, "recordings")
+
+# config.json can relocate recordings_dir
+cfg_path = os.path.join(DATA_DIR, "config.json")
+if os.path.exists(cfg_path):
+    try:
+        REC_DIR = json.load(open(cfg_path)).get("recordings_dir") or REC_DIR
+    except Exception:
+        pass
 
 
 def hr(title):
@@ -30,18 +40,18 @@ def hr(title):
 def probe_channel(ch_id, name, url):
     hr(f"Channel {ch_id}: {name}")
     print(f"URL: {url}")
-    print("\n-- ffprobe (15s timeout) --")
+    print("\n-- ffprobe (20s timeout) --")
     try:
         out = subprocess.run(
             ["ffprobe", "-hide_banner", "-v", "info", url],
-            capture_output=True, text=True, timeout=20)
+            capture_output=True, text=True, timeout=25)
         lines = [l.rstrip() for l in (out.stderr + out.stdout).splitlines()
                  if any(k in l for k in ("Stream", "Duration", "Input", "error", "Error", "timed out"))]
         print("\n".join(lines[:25]) or "(no output)")
     except FileNotFoundError:
         print("ffprobe not found")
     except subprocess.TimeoutExpired:
-        print("ffprobe TIMED OUT after 20s - stream is not answering")
+        print("ffprobe TIMED OUT after 25s - stream is not answering")
 
 
 def show_recording(folder):
@@ -67,6 +77,13 @@ def show_recording(folder):
 
 
 def main():
+    print(f"DB: {DB}  exists={os.path.exists(DB)}")
+    print(f"recordings: {REC_DIR}  exists={os.path.isdir(REC_DIR)}")
+    if not os.path.exists(DB):
+        print("\nDB not found. If the service runs with IPTV_DATA_DIR set, run:")
+        print("  systemctl cat pi-iptv-dvr | grep -i environment")
+        return
+
     filters = [a.lower() for a in sys.argv[1:]]
     con = sqlite3.connect(DB)
 
