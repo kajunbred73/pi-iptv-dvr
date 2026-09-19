@@ -168,8 +168,7 @@ class Recorder:
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _loop(self):
-        db.execute("UPDATE recordings SET status='failed' WHERE status='recording'")
-        db.execute("UPDATE schedules SET status='failed' WHERE status='recording'")
+        self._recover()
         while True:
             try:
                 self._tick()
@@ -177,6 +176,13 @@ class Recorder:
             except Exception:
                 log.exception("recorder tick failed")
             time.sleep(10)
+
+    def _recover(self):
+        """Recordings left in 'recording' by a restart/crash: keep what made it to disk."""
+        for rec in db.rows("SELECT id FROM recordings WHERE status='recording'"):
+            sched = db.row("SELECT id FROM schedules WHERE recording_id=? AND status='recording'", (rec["id"],))
+            self._finalize(sched["id"] if sched else None, rec["id"], "recovered")
+        db.execute("UPDATE schedules SET status='failed' WHERE status='recording'")
 
     def _tick(self):
         now = int(time.time())
@@ -251,6 +257,11 @@ class Recorder:
         return rid
 
     def _finish(self, sid, rid, rc):
+        self._finalize(sid, rid, rc)
+        with self.lock:
+            self.timeshift.pop(rid, None)
+
+    def _finalize(self, sid, rid, rc):
         rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,))
         out_dir = os.path.join(config.get("recordings_dir"), rec["path"]) if rec else None
         size, ok = 0, False
@@ -265,9 +276,8 @@ class Recorder:
         status = "done" if ok else "failed"
         log.info("record finish sched=%s rec=%s rc=%s status=%s size=%d", sid, rid, rc, status, size)
         db.execute("UPDATE recordings SET status=?, size_bytes=?, stop=? WHERE id=?", (status, size, int(time.time()), rid))
-        db.execute("UPDATE schedules SET status=? WHERE id=? AND status != 'cancelled'", (status, sid))
-        with self.lock:
-            self.timeshift.pop(rid, None)
+        if sid is not None:
+            db.execute("UPDATE schedules SET status=? WHERE id=? AND status != 'cancelled'", (status, sid))
 
     def cancel(self, sid):
         db.execute("UPDATE schedules SET status='cancelled' WHERE id=? AND status IN ('scheduled','recording')", (sid,))
