@@ -227,6 +227,20 @@ class Recorder:
         for sid, (proc, rid) in active:
             sched = db.row("SELECT * FROM schedules WHERE id=?", (sid,))
             expired = sched is None or now >= sched["stop"] + post or sched["status"] == "cancelled"
+            with self.lock:
+                t = self.timeshift.get(rid)
+            if expired and sched is not None and sched["status"] != "cancelled" \
+                    and t is not None and not t["keep"] and now - t["touch"] <= idle:
+                # The EPG slot ended but someone is still watching: roll the live buffer
+                # into the next program instead of cutting playback mid-show.
+                ch = db.row("SELECT tvg_id FROM channels WHERE id=?", (sched["channel_id"],))
+                nxt = db.row("SELECT stop FROM programs WHERE tvg_id=? AND start>=? "
+                             "ORDER BY start LIMIT 1", (ch["tvg_id"], sched["stop"])) if ch else None
+                newstop = nxt["stop"] if nxt else sched["stop"] + 1800
+                db.execute("UPDATE schedules SET stop=? WHERE id=?", (newstop, sid))
+                db.execute("UPDATE recordings SET stop=? WHERE id=?", (newstop, rid))
+                log.info("timeshift extended to %s rec=%s", newstop, rid)
+                expired = False
             if expired and proc.poll() is None:
                 proc.terminate()
             if proc.poll() is not None or expired:
@@ -238,6 +252,11 @@ class Recorder:
                 with self.lock:
                     owned = self.active.pop(sid, None) is not None
                 if owned:
+                    # A live buffer whose ffmpeg died early: restart it in place, appending
+                    # to the same playlist so the viewer's rejoin picks it back up.
+                    if t is not None and not expired \
+                            and self._restart_timeshift(sid, rid, sched, now):
+                        continue
                     self._finish(sid, rid, proc.returncode)
 
     def _start(self, sched, now, post, timeshift=False):
@@ -263,9 +282,13 @@ class Recorder:
         duration = max(60, sched["stop"] + post - now)
         # Event-style HLS: playable on Roku while still recording; ENDLIST written on finish.
         # Shorter segments for live buffers so the viewer can join sooner.
+        # Timeshift gets no -t: expiry is enforced by _tick, which can extend the stop
+        # while a viewer is still watching (a baked-in -t would kill it mid-show).
         seg = "3" if timeshift else "6"
-        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args() + [
-            "-t", str(duration),
+        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args()
+        if not timeshift:
+            cmd += ["-t", str(duration)]
+        cmd += [
             "-f", "hls", "-hls_time", seg, "-hls_list_size", "0",
             "-hls_playlist_type", "event",
             "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
@@ -347,9 +370,7 @@ class Recorder:
         shutil.rmtree(out_dir, ignore_errors=True)
         os.makedirs(out_dir, exist_ok=True)
         playlist = os.path.join(out_dir, "index.m3u8")
-        duration = max(60, stop - now)
         cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args() + [
-            "-t", str(duration),
             "-f", "hls", "-hls_time", "3", "-hls_list_size", "0",
             "-hls_playlist_type", "event",
             "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
@@ -367,6 +388,41 @@ class Recorder:
                    (now, stop, rid))
         log.info("timeshift restart in place rec=%s", rid)
         return rid
+
+    def _restart_timeshift(self, sid, rid, sched, now):
+        """Restart a live buffer's ffmpeg in the same folder, appending to the existing
+        playlist (append_list) and continuing segment numbering, so a Roku rejoining
+        the same stream URL picks up where it left off."""
+        rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,))
+        ch = db.row("SELECT * FROM channels WHERE id=?", (sched["channel_id"],)) if sched else None
+        if not rec or not ch:
+            return False
+        out_dir = os.path.join(config.get("recordings_dir"), rec["path"])
+        playlist = os.path.join(out_dir, "index.m3u8")
+        nseg = 0
+        try:
+            text = open(playlist).read()
+            if "#EXT-X-ENDLIST" in text:
+                # append_list requires a still-open playlist
+                with open(playlist, "w") as f:
+                    f.write(text.replace("#EXT-X-ENDLIST\n", "").replace("#EXT-X-ENDLIST", ""))
+            nseg = len([x for x in os.listdir(out_dir) if re.fullmatch(r"seg\d+\.ts", x)])
+        except OSError:
+            pass
+        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args() + [
+            "-f", "hls", "-hls_time", "3", "-hls_list_size", "0",
+            "-hls_playlist_type", "event",
+            "-hls_flags", "append_list",
+            "-start_number", str(nseg),
+            "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
+            playlist,
+        ]
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                stderr=open(os.path.join(out_dir, "ffmpeg.log"), "ab"))
+        with self.lock:
+            self.active[sid] = (proc, rid)
+        log.info("timeshift ffmpeg restarted in place rec=%s sid=%s from seg %d", rid, sid, nseg)
+        return True
 
     def touch_timeshift(self, rid):
         with self.lock:

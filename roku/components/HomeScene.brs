@@ -1328,7 +1328,7 @@ sub onVideoState()
     else if st = "finished"
         ' A live buffer only really ends when the Pi writes ENDLIST; if the player ran off the
         ' end of the growing playlist, rejoin once the buffer has grown instead of stopping.
-        if m.recordingId >= 0 and m.isLive and m.retryCount < 15 and not m.retrying
+        if m.recordingId >= 0 and m.isLive and m.retryCount < 30 and not m.retrying
             m.retrying = true
             m.retryCount = m.retryCount + 1
             if m.video.position <> invalid then m.finishPos = m.video.position
