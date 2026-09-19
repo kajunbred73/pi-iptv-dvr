@@ -37,6 +37,10 @@ def _input_args(url):
         # on_network_error + at_eof keep ffmpeg reconnecting instead of dying.
         args += ["-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1",
                  "-reconnect_on_network_error", "1", "-reconnect_delay_max", "5",
+                 # Stamp packets with arrival time instead of trusting the source clock: some
+                 # feeds jump their timestamps (multi-day discontinuities on reconnect), which
+                 # corrupts the HLS muxer's segment table and yields playlists with no EXTINF.
+                 "-use_wallclock_as_timestamps", "1",
                  "-user_agent", config.get("user_agent")]
     else:
         args += ["-re"]  # local files: read in real time
@@ -158,6 +162,23 @@ def _safe_name(s):
     return re.sub(r"[^A-Za-z0-9._ -]+", "_", s or "").strip()[:80] or "recording"
 
 
+def _rebuild_playlist(out_dir, segs):
+    """Rewrite index.m3u8 when it lost its EXTINF list (e.g. a colliding ffmpeg run truncated
+    it) but the segment files are still on disk. Durations are nominal; that is fine for
+    sequential playback."""
+    names = sorted(f for f in segs if re.fullmatch(r"seg\d+\.ts", f))
+    if not names:
+        return
+    target = int(config.get("hls_segment_seconds")) or 4
+    lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-REBUILT",
+             f"#EXT-X-TARGETDURATION:{target + 1}", "#EXT-X-MEDIA-SEQUENCE:0"]
+    lines += [l for n in names for l in (f"#EXTINF:{float(target):.6f},", n)]
+    lines.append("#EXT-X-ENDLIST")
+    with open(os.path.join(out_dir, "index.m3u8"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    log.info("rebuilt playlist in %s (%d segments)", out_dir, len(names))
+
+
 class Recorder:
     def __init__(self):
         self.active = {}   # schedule_id -> (Popen, recording_id)
@@ -225,7 +246,10 @@ class Recorder:
             db.execute("UPDATE schedules SET status='failed' WHERE id=?", (sched["id"],))
             return
         stamp = time.strftime("%Y%m%d-%H%M", time.localtime(sched["start"]))
-        folder = f"{stamp} {_safe_name(sched['title'] or ch['name'])}"
+        # Folder must be unique per schedule: two recordings of the same show started in the
+        # same minute would otherwise share a directory, and the second ffmpeg truncates
+        # index.m3u8 while the first is still writing it.
+        folder = f"{stamp} {_safe_name(sched['title'] or ch['name'])}-s{sched['id']}"
         out_dir = os.path.join(config.get("recordings_dir"), folder)
         os.makedirs(out_dir, exist_ok=True)
         playlist = os.path.join(out_dir, "index.m3u8")
@@ -270,9 +294,13 @@ class Recorder:
             size = sum(os.path.getsize(os.path.join(out_dir, f)) for f in segs)
             ok = len(segs) > 0
             pl = os.path.join(out_dir, "index.m3u8")
-            if ok and os.path.exists(pl) and "#EXT-X-ENDLIST" not in open(pl).read():
-                with open(pl, "a") as f:
-                    f.write("#EXT-X-ENDLIST\n")
+            if ok and os.path.exists(pl):
+                text = open(pl).read()
+                if "#EXTINF" not in text:
+                    _rebuild_playlist(out_dir, segs)
+                elif "#EXT-X-ENDLIST" not in text:
+                    with open(pl, "a") as f:
+                        f.write("#EXT-X-ENDLIST\n")
         status = "done" if ok else "failed"
         log.info("record finish sched=%s rec=%s rc=%s status=%s size=%d", sid, rid, rc, status, size)
         db.execute("UPDATE recordings SET status=?, size_bytes=?, stop=? WHERE id=?", (status, size, int(time.time()), rid))
@@ -398,15 +426,21 @@ class Recorder:
 
     def segments(self, rid):
         """(segment count, playlist finished?) for a recording's HLS playlist."""
-        rec = db.row("SELECT path FROM recordings WHERE id=?", (rid,))
+        rec = db.row("SELECT path, status FROM recordings WHERE id=?", (rid,))
         if not rec:
             return 0, False
-        pl = os.path.join(config.get("recordings_dir"), rec["path"], "index.m3u8")
+        out_dir = os.path.join(config.get("recordings_dir"), rec["path"])
+        pl = os.path.join(out_dir, "index.m3u8")
         try:
             with open(pl) as f:
                 text = f.read()
         except OSError:
             return 0, False
+        if "#EXTINF" not in text and rec["status"] != "recording" and "#EXT-X-REBUILT" not in text:
+            segs = [f for f in os.listdir(out_dir) if f.endswith(".ts")]
+            if segs:
+                _rebuild_playlist(out_dir, segs)
+                text = open(pl).read()
         return text.count("#EXTINF"), "#EXT-X-ENDLIST" in text
 
 
