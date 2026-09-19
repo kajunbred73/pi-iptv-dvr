@@ -33,10 +33,10 @@ def _input_args(url):
             "-fflags", "+genpts+discardcorrupt+igndts", "-err_detect", "ignore_err",
             "-analyzeduration", "3000000", "-probesize", "5000000"]
     if url.startswith("http"):
-        # Xtream .ts streams are closed by the provider every ~75MB; reconnect_at_eof
-        # treats that close as recoverable and keeps the recording running seamlessly.
+        # Xtream .ts streams are closed by the provider mid-transfer at random offsets;
+        # on_network_error + at_eof keep ffmpeg reconnecting instead of dying.
         args += ["-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1",
-                 "-reconnect_delay_max", "5",
+                 "-reconnect_on_network_error", "1", "-reconnect_delay_max", "5",
                  "-user_agent", config.get("user_agent")]
     else:
         args += ["-re"]  # local files: read in real time

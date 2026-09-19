@@ -53,13 +53,13 @@ def probe_channel(ch_id, name, url):
     except subprocess.TimeoutExpired:
         print("ffprobe TIMED OUT after 25s - stream is not answering")
 
-    # Same ffmpeg args streamer.py uses for recordings, minus -reconnect_streamed
-    # (resuming at a byte offset needs Range support some providers lack).
+    # Same ffmpeg args streamer.py uses for recordings.
     print("\n-- ffmpeg record test (up to 150s, Ctrl+C to skip) --")
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
            "-fflags", "+genpts+discardcorrupt+igndts", "-err_detect", "ignore_err",
            "-analyzeduration", "3000000", "-probesize", "5000000",
-           "-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_delay_max", "5",
+           "-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1",
+           "-reconnect_on_network_error", "1", "-reconnect_delay_max", "5",
            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
            "-i", url, "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy",
            "-sn", "-dn", "-f", "null", "-"]
