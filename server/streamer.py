@@ -54,7 +54,11 @@ def _copy_args():
     # Some feeds send SPS/PPS only once at stream start, so every HLS segment after the first
     # is undecodable on its own and the Roku dies as soon as it crosses a segment boundary;
     # dump_extra re-inserts them before every keyframe.
-    return ["-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-bsf:v", "dump_extra=freq=keyframe",
+    return ["-map", "0:v:0?", "-map", "0:a:0?",
+            "-c:v", "copy", "-bsf:v", "dump_extra=freq=keyframe",
+            # Roku only decodes AAC-LC/HE-AAC; feeds with AAC Main (or AC3/MP2) refuse to
+            # start. Re-encode audio to AAC-LC - cheap compared to video, which stays copied.
+            "-c:a", "aac", "-b:a", "128k", "-ac", "2",
             "-sn", "-dn",
             "-avoid_negative_ts", "make_zero", "-max_interleave_delta", "0",
             "-muxdelay", "0", "-muxpreload", "0"]
