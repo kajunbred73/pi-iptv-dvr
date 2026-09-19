@@ -53,6 +53,27 @@ def probe_channel(ch_id, name, url):
     except subprocess.TimeoutExpired:
         print("ffprobe TIMED OUT after 25s - stream is not answering")
 
+    # Same ffmpeg args streamer.py uses for recordings, minus -reconnect_streamed
+    # (resuming at a byte offset needs Range support some providers lack).
+    print("\n-- ffmpeg record test (up to 150s, Ctrl+C to skip) --")
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
+           "-fflags", "+genpts+discardcorrupt+igndts", "-err_detect", "ignore_err",
+           "-analyzeduration", "3000000", "-probesize", "5000000",
+           "-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_delay_max", "5",
+           "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
+           "-i", url, "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy",
+           "-sn", "-dn", "-f", "null", "-"]
+    try:
+        t0 = time.time()
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=150)
+        ran = int(time.time() - t0)
+        print(f"ffmpeg EXITED by itself after {ran}s (rc={out.returncode})  <-- PROBLEM")
+    except subprocess.TimeoutExpired:
+        print("ffmpeg still running at 150s - stream is fine, problem is elsewhere")
+        return
+    lines = [l.rstrip() for l in out.stderr.splitlines() if l.strip()]
+    print("\n".join(lines[-15:]))
+
 
 def show_recording(folder):
     hr(f"Recording folder: {folder}")
