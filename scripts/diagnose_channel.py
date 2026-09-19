@@ -90,6 +90,18 @@ def show_recording(folder):
         print("\n".join(text.splitlines()[-8:]))
     else:
         print("no index.m3u8")
+    # A segment other than the first must decode on its own (SPS/PPS present), or the
+    # Roku fails as soon as playback crosses into it.
+    later = sorted(segs)[1:2]
+    if later:
+        seg = os.path.join(path, later[0])
+        try:
+            out = subprocess.run(["ffprobe", "-hide_banner", seg], capture_output=True, text=True, timeout=30)
+            bad = sum(1 for l in out.stderr.splitlines() if "no frame" in l or "non-existing SPS" in l)
+            verdict = "MISSING SPS/PPS  <-- PROBLEM (needs dump_extra)" if bad else "decodes OK"
+            print(f"segment check {later[0]}: {verdict}")
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"segment check skipped: {e}")
     log = os.path.join(path, "ffmpeg.log")
     if os.path.exists(log):
         print("-- ffmpeg.log tail --")
