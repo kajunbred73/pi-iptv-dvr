@@ -292,7 +292,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 20"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 21"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -809,7 +809,11 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     c.url = url
     c.title = title
     c.streamFormat = "hls"
-    c.live = isLive
+    ' Play the recording buffer as VOD even for live: joining at the live edge of a
+    ' still-growing playlist left ~one segment of runway and the player reported
+    ' "finished" the instant it stalled. VOD mode plays from position 0, gives the
+    ' seek slider the whole buffer, and keeps re-fetching until ENDLIST.
+    c.live = false
     m.video.content = c
     m.video.loop = false
     m.video.visible = true
@@ -829,9 +833,8 @@ sub rejoinLive()
     c.url = m.streamUrl
     c.title = m.playTitle
     c.streamFormat = "hls"
-    c.live = true
-    ' Resume a couple of seconds behind where playback ran out so we don't re-finish
-    ' instantly; ignored on a true live playlist (player joins at the live edge).
+    c.live = false
+    ' Resume a couple of seconds behind where playback ran out so we don't re-finish instantly.
     if m.finishPos > 4 then c.playStart = m.finishPos - 3
     m.video.content = c
     m.video.visible = true

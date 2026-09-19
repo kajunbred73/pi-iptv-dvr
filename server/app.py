@@ -6,7 +6,7 @@ import time
 
 from urllib.parse import quote
 
-from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 import config
 import db
@@ -423,20 +423,7 @@ def recording_file(rid, fname):
     rec_dir = os.path.join(config.get("recordings_dir"), rec["path"])
     if fname.endswith(".m3u8"):
         streamer.recorder.touch_timeshift(rid)
-        # While the recording is still growing, serve it as a plain live playlist: the Roku
-        # player treats an EVENT playlist as fixed-length, joins at its end and reports
-        # "finished" instead of re-fetching it as it grows. Once ENDLIST is written it is VOD.
-        try:
-            with open(os.path.join(rec_dir, fname)) as f:
-                text = f.read()
-        except OSError:
-            abort(404)
-        if "#EXT-X-ENDLIST" not in text:
-            text = "".join(line for line in text.splitlines(keepends=True)
-                           if not line.startswith("#EXT-X-PLAYLIST-TYPE"))
-        resp = Response(text, mimetype="application/vnd.apple.mpegurl")
-    else:
-        resp = send_from_directory(rec_dir, fname, conditional=False)
+    resp = send_from_directory(rec_dir, fname, conditional=False)
     resp.headers["Cache-Control"] = "no-cache"
     return resp
 
