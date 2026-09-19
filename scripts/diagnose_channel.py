@@ -5,8 +5,10 @@ Run from the repo root on the Pi:
 
     python3 scripts/diagnose_channel.py "FOX 26" "TV One"
 
-Each argument is a name filter (case-insensitive substring). With no arguments it
-just inspects the 3 most recent recordings. Prints channel DB info, an ffprobe of
+Each argument is a name filter (case-insensitive substring). At most MAX_CHANNELS
+matches are probed in total (each probe holds the stream open for up to 150s), so
+use a specific filter like "kriv" rather than "fox". With no arguments it just
+inspects the 3 most recent recordings. Prints channel DB info, an ffprobe of
 the stream URL, and the ffmpeg log + playlist state for the newest recording
 folders so the output can be screenshotted/emailed back.
 """
@@ -21,6 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.environ.get("IPTV_DATA_DIR", os.path.join(ROOT, "server", "data"))
 DB = os.path.join(DATA_DIR, "iptv.db")
 REC_DIR = os.path.join(DATA_DIR, "recordings")
+MAX_CHANNELS = 3
 
 # config.json can relocate recordings_dir
 cfg_path = os.path.join(DATA_DIR, "config.json")
@@ -128,8 +131,14 @@ def main():
                     (f"%{f}%",)):
                 if ch_id in seen:
                     continue
+                if len(seen) >= MAX_CHANNELS:
+                    print(f"\nStopping after {MAX_CHANNELS} channels - use a more specific filter "
+                          f"to probe others.")
+                    break
                 seen.add(ch_id)
                 probe_channel(ch_id, name, url)
+            if len(seen) >= MAX_CHANNELS:
+                break
         if not seen:
             print("No channels matched. Try a shorter filter, e.g. 'fox' or 'one'.")
 
