@@ -387,6 +387,11 @@ def api_config_set():
     for k in ("refresh_hours", "pre_pad_min", "post_pad_min", "hls_segment_seconds", "hls_list_size", "live_idle_seconds"):
         if k in body:
             body[k] = int(body[k])
+    for k in ("xtream_hls_input",):
+        if k in body:
+            body[k] = body[k] in (True, "1", "true", "on", 1)
+        if k in body:
+            body[k] = int(body[k])
     return jsonify(config.save(body))
 
 
