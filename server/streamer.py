@@ -37,10 +37,6 @@ def _input_args(url):
         # on_network_error + at_eof keep ffmpeg reconnecting instead of dying.
         args += ["-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1",
                  "-reconnect_on_network_error", "1", "-reconnect_delay_max", "5",
-                 # Stamp packets with arrival time instead of trusting the source clock: some
-                 # feeds jump their timestamps (multi-day discontinuities on reconnect), which
-                 # corrupts the HLS muxer's segment table and yields playlists with no EXTINF.
-                 "-use_wallclock_as_timestamps", "1",
                  "-user_agent", config.get("user_agent")]
     else:
         args += ["-re"]  # local files: read in real time
