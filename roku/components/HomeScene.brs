@@ -63,6 +63,8 @@ sub init()
     m.retryCount = 0
     m.retrying = false
     m.finishPos = 0
+    m.lastErr = ""
+    m.lastSegs = 0
     m.readyAttempts = 0
     m.resumeRecordingId = -1
     m.resumeUrl = ""
@@ -292,7 +294,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 21"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 22"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -1272,7 +1274,7 @@ sub onVideoState()
             m.retryTimer.control = "start"
         else
             if m.isLive
-                playError("The live buffer ended before playback started.")
+                playError("The live buffer stopped producing video (" + txt(m.lastSegs) + " segments). " + m.lastErr)
             else
                 stopVideo(true)
             end if
@@ -1358,6 +1360,8 @@ sub onApiResponse(ev as Object)
         end if
     else if tag = "rejoin"
         if not m.video.visible then return
+        m.lastErr = txt(r.error)
+        m.lastSegs = r.segments
         if txt(r.status) = "recording" or (r.ready = true)
             ' Only reload once the buffer actually grew past where we stopped (~2+ new
             ' segments); reloading immediately just re-finished and burned the retries.
