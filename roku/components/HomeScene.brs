@@ -828,6 +828,8 @@ end sub
 ' "play" on a Video that has finished replays the manifest it already has instead of
 ' fetching the (now longer) one from the Pi.
 sub rejoinLive()
+    ' Grab duration before stopping - "stop" can reset it.
+    dur = m.video.duration
     if m.video.state = "playing" or m.video.state = "paused" or m.video.state = "buffering"
         m.video.control = "stop"
     end if
@@ -836,8 +838,14 @@ sub rejoinLive()
     c.title = m.playTitle
     c.streamFormat = "hls"
     c.live = false
-    ' Resume a couple of seconds behind where playback ran out so we don't re-finish instantly.
-    if m.finishPos > 4 then c.playStart = m.finishPos - 3
+    ' Jump to live = near the end of the buffer we already know about (VOD mode: duration is
+    ' the playlist length at last fetch). Falling back to finishPos covers the case where
+    ' playback ran out before the user asked to rejoin.
+    if dur <> invalid and dur > 15
+        c.playStart = dur - 10
+    else if m.finishPos > 4
+        c.playStart = m.finishPos - 3
+    end if
     m.video.content = c
     m.video.visible = true
     focusVideo()
