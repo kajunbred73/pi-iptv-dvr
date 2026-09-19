@@ -24,10 +24,8 @@ DEFAULTS = {
     "timeshift_idle_seconds": 120,   # stop a live buffer nobody has touched for this long
     "timeshift_keep_hours": 2,       # delete un-kept live buffers this long after they end
     "timeshift_min_segments": 3,     # segments needed before the Roku starts playing
-    "xtream_hls_input": True,        # pull Xtream live streams as .m3u8 instead of raw .ts
-                                     # (raw .ts connections get closed every ~75MB by the
-                                     # provider; ffmpeg's reconnect mid-stream corrupts and
-                                     # eventually kills the recording)
+    "xtream_hls_input": False,       # pull Xtream live streams as .m3u8 instead of raw .ts
+                                     # (only if the provider actually serves that endpoint)
 }
 
 _lock = threading.Lock()
