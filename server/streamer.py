@@ -47,7 +47,11 @@ def _input_args(url):
 def _copy_args():
     # Remux only (no transcoding) so a Pi can keep up. Roku plays H.264/AAC HLS,
     # which is what nearly all IPTV sources already are.
-    return ["-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-sn", "-dn",
+    # Some feeds send SPS/PPS only once at stream start, so every HLS segment after the first
+    # is undecodable on its own and the Roku dies as soon as it crosses a segment boundary;
+    # dump_extra re-inserts them before every keyframe.
+    return ["-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-bsf:v", "dump_extra=freq=keyframe",
+            "-sn", "-dn",
             "-avoid_negative_ts", "make_zero", "-max_interleave_delta", "0",
             "-muxdelay", "0", "-muxpreload", "0"]
 
