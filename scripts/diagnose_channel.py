@@ -56,8 +56,12 @@ def probe_channel(ch_id, name, url):
     except subprocess.TimeoutExpired:
         print("ffprobe TIMED OUT after 25s - stream is not answering")
 
-    # Same ffmpeg args streamer.py uses for recordings.
-    print("\n-- ffmpeg record test (up to 150s, Ctrl+C to skip) --")
+    # Real HLS record test - the exact args streamer.py uses for timeshift buffers.
+    print("\n-- ffmpeg HLS record test (60s, Ctrl+C to skip) --")
+    tmp = os.path.join(ROOT, "server", "data", "diag_test")
+    os.makedirs(tmp, exist_ok=True)
+    for f in os.listdir(tmp):
+        os.remove(os.path.join(tmp, f))
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
            "-fflags", "+genpts+discardcorrupt+igndts", "-err_detect", "ignore_err",
            "-analyzeduration", "3000000", "-probesize", "5000000",
@@ -65,17 +69,31 @@ def probe_channel(ch_id, name, url):
            "-reconnect_on_network_error", "1", "-reconnect_delay_max", "5",
            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
            "-i", url, "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy",
-           "-sn", "-dn", "-f", "null", "-"]
+           "-bsf:v", "dump_extra=freq=keyframe", "-sn", "-dn",
+           "-avoid_negative_ts", "make_zero", "-max_interleave_delta", "0",
+           "-muxdelay", "0", "-muxpreload", "0",
+           "-t", "60",
+           "-f", "hls", "-hls_time", "3", "-hls_list_size", "0",
+           "-hls_playlist_type", "event",
+           "-hls_segment_filename", os.path.join(tmp, "seg%05d.ts"),
+           os.path.join(tmp, "index.m3u8")]
     try:
-        t0 = time.time()
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=150)
-        ran = int(time.time() - t0)
-        print(f"ffmpeg EXITED by itself after {ran}s (rc={out.returncode})  <-- PROBLEM")
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=75)
+        print(f"ffmpeg exited (rc={out.returncode})")
     except subprocess.TimeoutExpired:
-        print("ffmpeg still running at 150s - stream is fine, problem is elsewhere")
-        return
-    lines = [l.rstrip() for l in out.stderr.splitlines() if l.strip()]
-    print("\n".join(lines[-15:]))
+        print("ffmpeg still running at 75s")
+        out = None
+    segs = [f for f in os.listdir(tmp) if f.endswith(".ts")]
+    print(f"--> produced {len(segs)} segments")
+    if len(segs) < 5:
+        print("    STALLED after a couple of segments  <-- PROBLEM")
+    if out is not None:
+        lines = [l.rstrip() for l in out.stderr.splitlines() if l.strip()]
+        print("\n".join(lines[-15:]))
+    pl = os.path.join(tmp, "index.m3u8")
+    if os.path.exists(pl):
+        print("-- playlist tail --")
+        print("\n".join(open(pl).read().splitlines()[-8:]))
 
 
 def show_recording(folder):
