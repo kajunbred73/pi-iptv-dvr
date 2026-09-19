@@ -60,6 +60,7 @@ sub init()
     m.teams = []
     m.sportItems = []
     m.pendingTeam = ""
+    m.renameIdx = -1
     m.retryCount = 0
     m.retrying = false
     m.finishPos = 0
@@ -257,7 +258,7 @@ sub showTab(idx as Integer)
         api("/groups", "groups")
     else if tabName = "Sports Teams"
         m.mode = "teams"
-        m.hint.text = "OK: find game   *: delete   Back: menu"
+        m.hint.text = "OK: team options (find / rename / delete)   Back: menu"
         loadTeams()
     else if tabName = "Recordings"
         m.mode = "recordings"
@@ -347,7 +348,7 @@ sub onContentSelected()
         if it.action = "add" then
             promptTeamAdd()
         else
-            findGame(it.name)
+            teamMenu(it.name, i - 1)
         end if
     else if m.mode = "recordings"
         m.recordingId = it.id
@@ -714,12 +715,64 @@ sub promptTeamAdd()
     m.top.dialog = k
 end sub
 
+' OK on a team: choose what to do with it instead of always searching.
+sub teamMenu(name as String, idx as Integer)
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = name
+    d.message = "Find a live game, or edit this team."
+    d.buttons = ["Find game", "Rename", "Delete", "Cancel"]
+    d.addField("teamIdx", "integer", false)
+    d.teamIdx = idx
+    d.observeField("buttonSelected", "onTeamMenu")
+    m.top.dialog = d
+end sub
+
+sub onTeamMenu(ev as Object)
+    d = ev.getRoSGNode()
+    btn = ev.getData()
+    idx = d.teamIdx
+    d.close = true
+    m.top.dialog = invalid
+    if idx < 0 or idx >= m.teams.count() then return
+    if btn = 0
+        findGame(m.teams[idx])
+    else if btn = 1
+        promptTeamRename(idx)
+    else if btn = 2
+        m.teams.delete(idx)
+        m.reg.write("teams", FormatJson(m.teams))
+        m.reg.flush()
+        loadTeams()
+    end if
+end sub
+
+sub promptTeamRename(idx as Integer)
+    m.renameIdx = idx
+    k = CreateObject("roSGNode", "KeyboardDialog")
+    k.title = "Rename sports team"
+    k.message = "Edit the team name"
+    k.text = m.teams[idx]
+    k.buttons = ["Save", "Cancel"]
+    k.observeField("buttonSelected", "onTeamEntered")
+    m.top.dialog = k
+end sub
+
 sub onTeamEntered(ev as Object)
     k = ev.getRoSGNode()
     if ev.getData() = 0
         name = k.text.trim()
-        if name <> "" then addTeam(name)
+        if name <> ""
+            if m.renameIdx >= 0 and m.renameIdx < m.teams.count()
+                m.teams[m.renameIdx] = name
+                m.reg.write("teams", FormatJson(m.teams))
+                m.reg.flush()
+                loadTeams()
+            else
+                addTeam(name)
+            end if
+        end if
     end if
+    m.renameIdx = -1
     k.close = true
     m.top.dialog = invalid
 end sub
