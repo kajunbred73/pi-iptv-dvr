@@ -58,8 +58,8 @@ sub init()
     m.startPos = 0
     m.guideOverlay = false
     m.overlayFocus = "pane"   ' pane | menubar (when the guide overlay is up)
-    m.overlayTab = 1          ' index into m.tabs; 1 = Guide
-    m.barFocus = 1
+    m.overlayTab = 2          ' index into m.tabs; starts on Recent, then remembers the last one used
+    m.barFocus = 2
     m.barLabels = []
     m.focusResults = false
     m.teams = []
@@ -1121,8 +1121,7 @@ end sub
 sub showGuideOverlay()
     m.guideOverlay = true
     m.overlayFocus = "pane"
-    m.overlayTab = 2          ' default to Recent - quick flip back to the other game
-    if m.gridFilter = "favorites=1" then m.overlayTab = 0
+    ' Reopen on whichever tab was used last (Recent the first time).
     m.barFocus = m.overlayTab
     buildMenuBar()
     updateMenuBar()
