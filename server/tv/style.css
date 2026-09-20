@@ -41,10 +41,11 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0b0e1
 #timebar { display: flex; margin-left: 300px; height: 34px; }
 .tslot { font-size: 18px; color: #8892a8; }
 
-/* video */
-#video { position: fixed; left: 0; top: 0; width: 1920px; height: 1080px;
-  background: #000; display: none; z-index: 50; }
-#video.pip { left: 960px; width: 960px; }
+/* video — percentage sizing so it fills whatever viewport the browser
+   reports (the TV browser's address bar steals some height) */
+#video { position: fixed; left: 0; top: 0; width: 100%; height: 100%;
+  background: #000; display: none; z-index: 50; object-fit: contain; }
+#video.pip { left: 50%; width: 50%; }
 #video.playing { display: block; }
 #osd { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: none;
   padding: 24px 40px; background: linear-gradient(transparent, rgba(0,0,0,.8)); }
@@ -53,7 +54,7 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0b0e1
 #osd-hint { font-size: 20px; color: #aab3c5; margin-top: 6px; }
 
 /* overlay (PiP menu while playing) */
-#overlay { position: fixed; left: 0; top: 0; width: 960px; height: 1080px; z-index: 55;
+#overlay { position: fixed; left: 0; top: 0; width: 50%; height: 100%; z-index: 55;
   background: #0b0e14; display: none; flex-direction: column; }
 #overlay.show { display: flex; }
 #menubar { display: flex; height: 60px; align-items: flex-end; padding: 0 24px; gap: 4px;
