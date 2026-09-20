@@ -1427,7 +1427,7 @@ sub onApiResponse(ev as Object)
         if not m.video.visible then return
         m.lastErr = txt(r.error)
         m.lastSegs = r.segments
-        if txt(r.status) = "recording" or (r.ready = true)
+        if txt(r.status) = "recording"
             ' Only reload once the buffer actually grew past where we stopped (~2+ new
             ' segments); reloading immediately just re-finished and burned the retries.
             if r.duration <> invalid and r.duration > m.finishPos + 6
@@ -1436,6 +1436,9 @@ sub onApiResponse(ev as Object)
                 m.retrying = true
                 m.retryTimer.control = "start"
             end if
+        else if txt(r.status) = "done"
+            ' The buffer is finalized: nothing more is coming, so don't loop the tail.
+            stopVideo(true)
         else
             playError("The Pi stopped this channel's recording (" + txt(r.status) + "). " + txt(r.error))
         end if

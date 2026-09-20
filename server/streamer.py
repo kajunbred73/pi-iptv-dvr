@@ -37,6 +37,10 @@ def _input_args(url):
         # on_network_error + at_eof keep ffmpeg reconnecting instead of dying.
         args += ["-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1",
                  "-reconnect_on_network_error", "1", "-reconnect_delay_max", "5",
+                 # A stalled connection that stays open produces no error and no EOF, so none
+                 # of the reconnect flags fire and segments just stop appearing. rw_timeout
+                 # turns a >10s silent read/write into an error the reconnect flags can act on.
+                 "-rw_timeout", "15000000",
                  "-user_agent", config.get("user_agent")]
     else:
         args += ["-re"]  # local files: read in real time
@@ -183,6 +187,7 @@ class Recorder:
     def __init__(self):
         self.active = {}   # schedule_id -> (Popen, recording_id)
         self.timeshift = {}  # recording_id -> {"sid", "touch", "keep"}
+        self.spawned = {}  # schedule_id -> spawn timestamp (for stall/runway checks)
         self.lock = threading.Lock()
 
     def start(self):
@@ -243,6 +248,19 @@ class Recorder:
                 expired = False
             if expired and proc.poll() is None:
                 proc.terminate()
+            elif proc.poll() is None:
+                # Hung connection: ffmpeg alive but the playlist stopped growing. Kill it so
+                # the restart path below resumes the buffer on a fresh connection.
+                rec = db.row("SELECT path FROM recordings WHERE id=?", (rid,))
+                if rec:
+                    pl = os.path.join(config.get("recordings_dir"), rec["path"], "index.m3u8")
+                    try:
+                        quiet = now - os.path.getmtime(pl)
+                    except OSError:
+                        quiet = now - self.spawned.get(sid, now)
+                    if quiet > 60:
+                        log.warning("rec=%s playlist stalled %ds, restarting ffmpeg", rid, int(quiet))
+                        proc.terminate()
             if proc.poll() is not None or expired:
                 try:
                     proc.wait(10)
@@ -253,10 +271,14 @@ class Recorder:
                     owned = self.active.pop(sid, None) is not None
                 if owned:
                     # A live buffer whose ffmpeg died early: restart it in place, appending
-                    # to the same playlist so the viewer's rejoin picks it back up.
-                    if t is not None and not expired \
-                            and self._restart_timeshift(sid, rid, sched, now):
-                        continue
+                    # to the same playlist so the viewer's rejoin picks it back up. Give up
+                    # after several instant failures (e.g. provider URL went 404).
+                    runtime = now - self.spawned.pop(sid, now)
+                    if t is not None and not expired:
+                        fails = t.get("restart_fails", 0) + 1 if runtime < 15 else 0
+                        t["restart_fails"] = fails
+                        if fails < 5 and self._restart_timeshift(sid, rid, sched, now):
+                            continue
                     self._finish(sid, rid, proc.returncode)
 
     def _start(self, sched, now, post, timeshift=False):
@@ -298,6 +320,7 @@ class Recorder:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=open(os.path.join(out_dir, "ffmpeg.log"), "ab"))
         with self.lock:
             self.active[sched["id"]] = (proc, rid)
+            self.spawned[sched["id"]] = now
             if timeshift:
                 self.timeshift[rid] = {"sid": sched["id"], "touch": now, "keep": False}
         db.execute("UPDATE schedules SET status='recording', recording_id=? WHERE id=?", (rid, sched["id"]))
@@ -383,6 +406,7 @@ class Recorder:
                                 stderr=open(os.path.join(out_dir, "ffmpeg.log"), "ab"))
         with self.lock:
             self.active[sid] = (proc, rid)
+            self.spawned[sid] = now
             self.timeshift[rid] = {"sid": sid, "touch": now, "keep": False}
         db.execute("UPDATE recordings SET status='recording', start=?, stop=?, size_bytes=0 WHERE id=?",
                    (now, stop, rid))
@@ -421,6 +445,7 @@ class Recorder:
                                 stderr=open(os.path.join(out_dir, "ffmpeg.log"), "ab"))
         with self.lock:
             self.active[sid] = (proc, rid)
+            self.spawned[sid] = now
         log.info("timeshift ffmpeg restarted in place rec=%s sid=%s from seg %d", rid, sid, nseg)
         return True
 
