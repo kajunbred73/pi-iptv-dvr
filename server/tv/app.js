@@ -1200,6 +1200,20 @@ document.addEventListener('click', e => {
 
 // ---------------------------------------------------------------- boot
 
+// Scale the fixed 1920x1080 design space to the actual viewport (TV browsers
+// that ignore <meta viewport> report a smaller CSS size and crop otherwise).
+function fitScreen() {
+  const w = document.documentElement.clientWidth || 1920;
+  const h = document.documentElement.clientHeight || 1080;
+  const s = Math.min(w / 1920, h / 1080);
+  const app = $('app');
+  app.style.transform = `scale(${s})`;
+  app.style.left = Math.floor((w - 1920 * s) / 2) + 'px';
+  app.style.top = Math.floor((h - 1080 * s) / 2) + 'px';
+}
+window.addEventListener('resize', fitScreen);
+fitScreen();
+
 try {
   tizen.tvinputdevice.registerKeyBatch(
     ['MediaPlay', 'MediaPause', 'MediaPlayPause', 'MediaFastForward', 'MediaRewind', 'ColorF0Red', 'Info']);
