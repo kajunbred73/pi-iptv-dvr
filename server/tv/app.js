@@ -185,14 +185,16 @@ function renderGrid() {
   html += '</div>';
   r.channels.forEach((ch, ri) => {
     html += `<div class="grow ${ri === S.gridRow ? 'sel' : ''}" style="height:${chH}px">`;
-    html += `<div class="gchan ${ri === S.gridRow && S.gridCol === -1 && gridFocused() ? 'g-sel' : ''}" style="width:${cw}px;height:${chH}px">${ch.logo ? `<img src="${esc(ch.logo)}">` : ''}<span>${esc(txt(ch.num) + ' ' + ch.name)}</span></div>`;
+    html += `<div class="gchan ${ri === S.gridRow && S.gridCol === -1 && gridFocused() ? 'g-sel' : ''}" data-ri="${ri}" style="width:${cw}px;height:${chH}px">${ch.logo ? `<img src="${esc(ch.logo)}">` : ''}<span>${esc(txt(ch.num) + ' ' + ch.name)}</span></div>`;
+    let ci = 0;
     for (const p of (ch.programs || [])) {
       const a = Math.max(p.start, start), b = Math.min(p.stop, end);
       if (b <= a) continue;
       const x = cw + (a - start) / 1800 * sw, w = (b - a) / 1800 * sw;
       const isNow = p.start <= r.now && p.stop > r.now;
-      const isSel = ri === S.gridRow && isCellSel(ch, p);
-      html += `<div class="gcell ${isNow ? 'now' : ''} ${p.scheduled ? 'sched' : ''} ${isSel ? 'sel' : ''}" style="left:${x}px;width:${w}px;height:${chH - 12}px">${esc(txt(p.title))}${p.scheduled ? ' ●' : ''}</div>`;
+      const isSel = ri === S.gridRow && S.gridCol === ci && gridFocused();
+      html += `<div class="gcell ${isNow ? 'now' : ''} ${p.scheduled ? 'sched' : ''} ${isSel ? 'sel' : ''}" data-ri="${ri}" data-ci="${ci}" style="left:${x}px;width:${w}px;height:${chH - 12}px">${esc(txt(p.title))}${p.scheduled ? ' ●' : ''}</div>`;
+      ci++;
     }
     html += '</div>';
   });
@@ -202,10 +204,19 @@ function renderGrid() {
   updateGridDetail();
 }
 
-function isCellSel(ch, p) {
-  // selected program cell = the Nth program in row
-  const cells = (ch.programs || []).filter(pp => Math.min(pp.stop, S.gridData.end) > Math.max(pp.start, S.gridData.start));
-  return S.gridCol >= 0 && cells[S.gridCol] === p;
+// Cheap highlight-only update for arrow-key navigation — rebuilding the whole
+// grid DOM per keypress is what made navigation feel flaky on the TV browser.
+function updateGridSel() {
+  const el = S.overlay ? overlayEl() : $('grid');
+  const gf = gridFocused();
+  el.querySelectorAll('.grow').forEach((r, i) => r.classList.toggle('sel', i === S.gridRow));
+  el.querySelectorAll('.gchan').forEach(c =>
+    c.classList.toggle('g-sel', gf && +c.dataset.ri === S.gridRow && S.gridCol === -1));
+  el.querySelectorAll('.gcell').forEach(c =>
+    c.classList.toggle('sel', gf && +c.dataset.ri === S.gridRow && +c.dataset.ci === S.gridCol));
+  const row = el.querySelectorAll('.grow')[S.gridRow];
+  if (row) row.scrollIntoView({ block: 'nearest' });
+  updateGridDetail();
 }
 function gridFocused() { return (S.focus === 'grid' && !S.overlay) || (S.overlay && S.overlayFocus === 'pane' && ['Guide', 'Favorites'].includes(S.tabs[S.overlayTab])); }
 function overlayEl() { return $('overlay-pane'); }
@@ -691,6 +702,7 @@ function renderDialogButtons(buttons) {
 }
 function closeDialog() {
   $('dialog').classList.add('hidden');
+  $('dialog-input').blur();
   S.dialogCb = null;
   S.resumeIsVod = false;
   S.focus = video.classList.contains('playing') ? 'video' : 'content';
@@ -936,7 +948,7 @@ function gridMoveCol(d) {
   const ch = S.gridData.channels[S.gridRow];
   const n = (ch.programs || []).filter(pp => Math.min(pp.stop, S.gridData.end) > Math.max(pp.start, S.gridData.start)).length;
   S.gridCol = Math.max(-1, Math.min(S.gridCol + d, n - 1));
-  renderGrid();
+  updateGridSel();
 }
 
 // ---------------------------------------------------------------- options (long-OK / red)
@@ -987,7 +999,7 @@ document.addEventListener('keydown', e => {
 
   // dialog mode
   if (S.focus === 'dialog') {
-    if (e.target === $('dialog-input')) {
+    if (e.target === $('dialog-input') && !$('dialog-input').classList.contains('hidden')) {
       if (k === 'Backspace' || c === TIZEN_BACK || k === 'Escape') { e.stopPropagation(); closeDialog(); }
       else if (k === 'ArrowDown') e.target.blur();   // drop to the OK/Cancel buttons
       return;
@@ -1020,8 +1032,8 @@ document.addEventListener('keydown', e => {
         else if (k === 'ArrowDown' || k === 'Enter') { applyOverlayTab(S.barFocus); }
         else if (k === 'ArrowUp') { /* already on menubar */ }
       } else if (gridTab && S.gridData) {
-        if (k === 'ArrowUp') { S.gridRow = Math.max(0, S.gridRow - 1); S.gridCol = -1; renderGrid(); }
-        else if (k === 'ArrowDown') { S.gridRow = Math.min(S.gridData.channels.length - 1, S.gridRow + 1); S.gridCol = -1; renderGrid(); }
+        if (k === 'ArrowUp') { S.gridRow = Math.max(0, S.gridRow - 1); S.gridCol = -1; updateGridSel(); }
+        else if (k === 'ArrowDown') { S.gridRow = Math.min(S.gridData.channels.length - 1, S.gridRow + 1); S.gridCol = -1; updateGridSel(); }
         else if (k === 'ArrowLeft') { S.gridCol > -1 ? gridMoveCol(-1) : (S.overlayFocus = 'menubar', buildMenuBar()); }
         else if (k === 'ArrowRight') gridMoveCol(1);
         else if (k === 'Enter') { hideOverlay(); gridSelect(); }
@@ -1048,14 +1060,18 @@ document.addEventListener('keydown', e => {
     if (k === 'ArrowUp') S.menuFocus = Math.max(0, S.menuFocus - 1);
     else if (k === 'ArrowDown') S.menuFocus = Math.min(S.tabs.length - 1, S.menuFocus + 1);
     else if (k === 'ArrowRight' || k === 'Enter') {
+      clearTimeout(S.menuPreviewTimer);
       S.menuIdx = S.menuFocus;
       showTab(S.menuIdx);
       S.focus = S.mode === 'grid' ? 'grid' : 'content';
       renderMenu(); markSel();
       e.preventDefault(); return;
     }
-    showTab(S.menuFocus);
+    // Debounce the preview — an uncached /api/guide fetch per arrow press is
+    // what made the menu feel flaky.
     renderMenu();
+    clearTimeout(S.menuPreviewTimer);
+    S.menuPreviewTimer = setTimeout(() => showTab(S.menuFocus), 350);
     e.preventDefault();
     return;
   }
@@ -1075,8 +1091,8 @@ document.addEventListener('keydown', e => {
   // guide grid focus
   if (S.focus === 'grid') {
     if (!S.gridData) { e.preventDefault(); return; }
-    if (k === 'ArrowUp') { S.gridRow = Math.max(0, S.gridRow - 1); S.gridCol = -1; renderGrid(); }
-    else if (k === 'ArrowDown') { S.gridRow = Math.min(S.gridData.channels.length - 1, S.gridRow + 1); S.gridCol = -1; renderGrid(); }
+    if (k === 'ArrowUp') { S.gridRow = Math.max(0, S.gridRow - 1); S.gridCol = -1; updateGridSel(); }
+    else if (k === 'ArrowDown') { S.gridRow = Math.min(S.gridData.channels.length - 1, S.gridRow + 1); S.gridCol = -1; updateGridSel(); }
     else if (k === 'ArrowLeft') { if (S.gridCol <= -1) { S.focus = 'menu'; renderMenu(); } else gridMoveCol(-1); }
     else if (k === 'ArrowRight') gridMoveCol(1);
     else if (k === 'Enter') { /* keyup handles */ }
@@ -1087,22 +1103,36 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// long-press OK = options (Samsung remotes have no * key)
-let okTimer = null, okLong = false;
+// OK-key handling for content/grid focus. Samsung remotes have no * key, so
+// long-press = options. Some TV browsers fire keyup unreliably for remote
+// keys, so select works off three signals: quick keyup (tap), held-key
+// repeats (long press), or a fallback timer (platforms with no keyup).
+let okDownAt = 0, okPending = false, okLongDone = false;
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.repeat && (S.focus === 'content' || S.focus === 'grid')) {
-    okLong = false;
-    okTimer = setTimeout(() => { okLong = true; optionsAction(); }, 600);
+  if (e.key !== 'Enter' || (S.focus !== 'content' && S.focus !== 'grid')) return;
+  if (e.repeat) {
+    if (okPending && Date.now() - okDownAt > 400) {
+      okPending = false; okLongDone = true;
+      optionsAction();
+    }
+    return;
   }
+  okDownAt = Date.now(); okPending = true; okLongDone = false;
+  clearTimeout(S.okFallbackTimer);
+  S.okFallbackTimer = setTimeout(() => {
+    if (okPending) { okPending = false; selectNow(); }
+  }, 700);
 });
 document.addEventListener('keyup', e => {
-  if (e.key !== 'Enter') return;
-  if (!okTimer) return;
-  clearTimeout(okTimer); okTimer = null;
-  if (okLong) { okLong = false; return; }
+  if (e.key !== 'Enter' || !okPending) return;
+  okPending = false;
+  clearTimeout(S.okFallbackTimer);
+  if (!okLongDone) selectNow();
+});
+function selectNow() {
   if (S.focus === 'content') selectFocused();
   else if (S.focus === 'grid') gridSelect();
-});
+}
 
 // ---------------------------------------------------------------- boot
 
