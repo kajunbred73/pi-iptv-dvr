@@ -141,6 +141,32 @@ def main():
     filters = [a.lower() for a in sys.argv[1:]]
     con = sqlite3.connect(DB)
 
+    # "movie:<title>" args probe VOD entries instead of channels.
+    movie_filters = [f[6:] for f in filters if f.startswith("movie:")]
+    filters = [f for f in filters if not f.startswith("movie:")]
+    for mf in movie_filters:
+        found = False
+        for vid, name, url, ext in con.execute(
+                "SELECT id, name, url, ext FROM vod WHERE lower(name) LIKE ? ORDER BY name LIMIT 3",
+                (f"%{mf}%",)):
+            found = True
+            hr(f"Movie {vid}: {name}  (.{ext})")
+            print(f"URL: {url}")
+            print("\n-- ffprobe (25s timeout) --")
+            try:
+                out = subprocess.run(["ffprobe", "-hide_banner", "-v", "info", url],
+                                     capture_output=True, text=True, timeout=30)
+                lines = [l.rstrip() for l in (out.stderr + out.stdout).splitlines()
+                         if any(k in l for k in ("Stream", "Duration", "Input", "error",
+                                                 "Error", "timed out", "HTTP", "moov"))]
+                print("\n".join(lines[:20]) or "(no output)")
+            except FileNotFoundError:
+                print("ffprobe not found")
+            except subprocess.TimeoutExpired:
+                print("ffprobe TIMED OUT after 30s - the file URL is not answering")
+        if not found:
+            print(f"No movie matched 'movie:{mf}'")
+
     if filters:
         seen = set()
         for f in filters:
@@ -159,6 +185,39 @@ def main():
                 break
         if not seen:
             print("No channels matched. Try a shorter filter, e.g. 'fox' or 'one'.")
+
+    # Movie mux sessions: playlist state + ffmpeg.log tail per active/failed dir.
+    vod_dir = os.path.join(DATA_DIR, "vod")
+    try:
+        vod_n = con.execute("SELECT COUNT(*) FROM vod").fetchone()[0]
+    except sqlite3.Error:
+        vod_n = -1
+    hr(f"Movies (vod rows: {vod_n})")
+    if os.path.isdir(vod_dir):
+        dirs = sorted(os.listdir(vod_dir))
+        if not dirs:
+            print("no vod session dirs (nothing muxed or already cleaned up)")
+        for d in dirs[-3:]:
+            path = os.path.join(vod_dir, d)
+            print(f"\n-- vod/{d} --")
+            if not os.path.isdir(path):
+                continue
+            segs = [f for f in os.listdir(path) if f.endswith(".ts")]
+            print(f"{len(segs)} segment files")
+            pl = os.path.join(path, "index.m3u8")
+            if os.path.exists(pl):
+                text = open(pl).read()
+                print(f"playlist: {text.count('#EXTINF')} EXTINF, "
+                      f"ENDLIST={'yes' if '#EXT-X-ENDLIST' in text else 'no'}, "
+                      f"age={int(time.time() - os.path.getmtime(pl))}s")
+            else:
+                print("no index.m3u8")
+            log = os.path.join(path, "ffmpeg.log")
+            if os.path.exists(log):
+                lines = [l.rstrip() for l in open(log, errors="replace").read().splitlines() if l.strip()]
+                print("\n".join(lines[-12:]) or "(empty ffmpeg.log)")
+    else:
+        print("no vod dir")
 
     hr("Most recent recordings")
     recs = con.execute(

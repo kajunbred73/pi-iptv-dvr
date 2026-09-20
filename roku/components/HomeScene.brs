@@ -50,6 +50,7 @@ sub init()
     m.vodId = -1
     m.vodResume = 0
     m.vodOffset = 0
+    m.vodGroup = ""
     m.resumeIsVod = false
     m.playTitle = ""
     m.streamUrl = ""
@@ -313,7 +314,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 29"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Clear all movie resume marks", "Version 1.1 build 29"], ["server", "refresh", "vodclear", "version"])
 end sub
 
 sub onContentFocused()
@@ -368,8 +369,9 @@ sub onContentSelected()
         m.grid.setFocus(true)
     else if m.mode = "vodcats"
         m.mode = "vodlist"
+        m.vodGroup = txt(it.name)
         m.heading.text = "Movies: " + txt(it.name)
-        m.hint.text = "OK: play movie   Back: menu"
+        m.hint.text = "OK: play movie   *: clear resume mark   Back: menu"
         api("/vod?group=" + urlEnc(txt(it.name)), "vodlist")
     else if m.mode = "vodlist"
         m.vodId = it.id
@@ -406,6 +408,16 @@ sub onContentSelected()
         else if it = "refresh"
             toast("Refreshing on server...")
             api("/refresh", "refresh", "POST", "{}")
+        else if it = "vodclear"
+            n = 0
+            for each k in m.reg.getKeyList()
+                if Left(k, 5) = "vpos_"
+                    m.reg.delete(k)
+                    n = n + 1
+                end if
+            end for
+            m.reg.flush()
+            toast("Cleared " + n.toStr() + " saved movie position(s)")
         end if
     end if
 end sub
@@ -660,6 +672,9 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
                 return true
             else if m.mode = "teams"
                 deleteTeamFocused()
+                return true
+            else if m.mode = "vodlist"
+                clearVodResume()
                 return true
             end if
         else if m.menu.hasFocus() and m.tabs[m.menu.itemFocused] = "Search"
@@ -1178,6 +1193,17 @@ sub onResumeDialog(ev as Object)
     end if
     m.recordingId = m.resumeRecordingId
     play(m.resumeUrl, m.resumeTitle, m.resumeLive, startPos)
+end sub
+
+' * key on a movie: forget its saved position so it starts from the beginning.
+sub clearVodResume()
+    i = m.content.itemFocused
+    if i < 0 or i >= m.items.count() then return
+    it = m.items[i]
+    m.reg.delete("vpos_" + it.id.toStr())
+    m.reg.flush()
+    api("/vod?group=" + urlEnc(m.vodGroup), "vodlist")
+    toast("Resume point cleared")
 end sub
 
 ' Start the movie mux on the Pi at the chosen position (resume point or 0).

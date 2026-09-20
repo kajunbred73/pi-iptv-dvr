@@ -54,14 +54,17 @@ def _input_args(url, start_at=0):
     return args
 
 
-def _copy_args():
+def _copy_args(dump_extra=True):
     # Remux only (no transcoding) so a Pi can keep up. Roku plays H.264/AAC HLS,
     # which is what nearly all IPTV sources already are.
     # Some feeds send SPS/PPS only once at stream start, so every HLS segment after the first
     # is undecodable on its own and the Roku dies as soon as it crosses a segment boundary;
-    # dump_extra re-inserts them before every keyframe.
-    return ["-map", "0:v:0?", "-map", "0:a:0?",
-            "-c:v", "copy", "-bsf:v", "dump_extra=freq=keyframe",
+    # dump_extra re-inserts them before every keyframe. VOD files carry proper extradata
+    # and are often HEVC, which the filter rejects - so callers can skip it.
+    args = ["-map", "0:v:0?", "-map", "0:a:0?", "-c:v", "copy"]
+    if dump_extra:
+        args += ["-bsf:v", "dump_extra=freq=keyframe"]
+    return args + [
             # Roku only decodes AAC-LC/HE-AAC; feeds with AAC Main (or AC3/MP2) refuse to
             # start. Re-encode audio to AAC-LC - cheap compared to video, which stays copied.
             "-c:a", "aac", "-b:a", "128k", "-ac", "2",
@@ -605,7 +608,7 @@ class VodSession:
                 self.proc.kill()
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir, exist_ok=True)
-        cmd = [FFMPEG] + _input_args(self.movie["url"], self.start_at) + _copy_args() + [
+        cmd = [FFMPEG] + _input_args(self.movie["url"], self.start_at) + _copy_args(dump_extra=False) + [
             "-f", "hls", "-hls_time", "6", "-hls_list_size", "0",
             "-hls_playlist_type", "event",
             "-hls_segment_filename", os.path.join(self.dir, "seg%05d.ts"),
