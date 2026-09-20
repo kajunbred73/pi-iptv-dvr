@@ -559,11 +559,15 @@ _TV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tv")
 
 @app.get("/tv")
 def tv_index():
-    return send_from_directory(_TV_DIR, "index.html")
+    # Trailing slash so index.html's relative asset URLs (app.js, style.css)
+    # resolve to /tv/... — the same relative paths keep the packaged .wgt
+    # (file:// origin) working too.
+    return redirect("/tv/")
 
 
+@app.get("/tv/")
 @app.get("/tv/<path:fname>")
-def tv_file(fname):
+def tv_file(fname="index.html"):
     resp = send_from_directory(_TV_DIR, fname, conditional=False)
     resp.headers["Cache-Control"] = "no-cache"
     return resp
