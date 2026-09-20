@@ -1121,7 +1121,7 @@ end sub
 sub showGuideOverlay()
     m.guideOverlay = true
     m.overlayFocus = "pane"
-    m.overlayTab = 1
+    m.overlayTab = 2          ' default to Recent - quick flip back to the other game
     if m.gridFilter = "favorites=1" then m.overlayTab = 0
     m.barFocus = m.overlayTab
     buildMenuBar()
@@ -1129,7 +1129,6 @@ sub showGuideOverlay()
     if m.grid.data = invalid then loadGrid()
     ' Solid cover so the list/detail rows underneath don't bleed through the grid gaps.
     m.guideCover.visible = true
-    m.content.visible = false
     m.empty.visible = false
     m.detail.visible = false
     m.detailBg.visible = false
@@ -1140,10 +1139,9 @@ sub showGuideOverlay()
     m.video.translation = [960, 0]
     m.video.width = 960
     m.video.height = 1080
-    m.grid.visible = true
     m.grid.translation = [40, 110]
     m.grid.scale = [0.66, 0.66]
-    m.grid.setFocus(true)
+    applyOverlayTab(m.overlayTab)
     m.hint.text = "OK: menu   Back: close guide"
 end sub
 
