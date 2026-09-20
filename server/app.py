@@ -21,6 +21,16 @@ db.init()
 streamer.start()
 
 
+@app.after_request
+def _cors(resp):
+    # The packaged Tizen app (file:// origin) and browser clients on other
+    # devices call this API cross-origin.
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return resp
+
+
 # ---------------------------------------------------------------- helpers
 
 def _now():
@@ -538,6 +548,23 @@ def recording_file(rid, fname):
 def vod_file(vid, fname):
     s = streamer.vod.touch(vid) or abort(404)
     resp = send_from_directory(s.dir, fname, conditional=False)
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+# ---------------------------------------------------------------- tv app
+
+_TV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tv")
+
+
+@app.get("/tv")
+def tv_index():
+    return send_from_directory(_TV_DIR, "index.html")
+
+
+@app.get("/tv/<path:fname>")
+def tv_file(fname):
+    resp = send_from_directory(_TV_DIR, fname, conditional=False)
     resp.headers["Cache-Control"] = "no-cache"
     return resp
 

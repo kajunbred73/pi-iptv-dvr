@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920">
+<title>Pi IPTV DVR</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <div id="menu"></div>
+  <div id="main">
+    <div id="heading"></div>
+    <div id="content"></div>
+    <div id="grid"></div>
+    <div id="empty"></div>
+  </div>
+  <div id="statusbar"><span id="status"></span><span id="detail"></span><span id="hint"></span></div>
+</div>
+
+<video id="video" playsinline></video>
+<div id="osd"><div id="osd-title"></div><div id="osd-hint"></div></div>
+
+<div id="overlay">
+  <div id="menubar"></div>
+  <div id="overlay-pane"></div>
+  <div id="overlay-detail"></div>
+</div>
+
+<div id="dialog" class="hidden">
+  <div id="dialog-box">
+    <div id="dialog-title"></div>
+    <div id="dialog-msg"></div>
+    <div id="dialog-progress"></div>
+    <input id="dialog-input" class="hidden" type="text">
+    <div id="dialog-buttons"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -2,5 +2,6 @@ server/venv/
 git-sync/venv/
 server/data/
 dist/
+tizen/www/
 __pycache__/
 *.pyc
