@@ -1,4 +1,5 @@
 """ffmpeg-based live HLS proxy and DVR recorder."""
+import json
 import logging
 import os
 import re
@@ -6,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.request
 
 import config
 import db
@@ -188,6 +190,8 @@ class Recorder:
         self.active = {}   # schedule_id -> (Popen, recording_id)
         self.timeshift = {}  # recording_id -> {"sid", "touch", "keep"}
         self.spawned = {}  # schedule_id -> spawn timestamp (for stall/runway checks)
+        self.max_conn = None  # provider's concurrent-stream limit, if detectable
+        self._conn_probe = 0
         self.lock = threading.Lock()
 
     def start(self):
@@ -210,13 +214,52 @@ class Recorder:
             self._finalize(sched["id"] if sched else None, rec["id"], "recovered")
         db.execute("UPDATE schedules SET status='failed' WHERE status='recording'")
 
+    def _detect_max_connections(self):
+        """Ask the provider (Xtream player_api) how many concurrent streams this account
+        allows, so we can refuse extra connections instead of letting the provider kill
+        whichever stream it picks (which freezes playback)."""
+        ch = db.row("SELECT url FROM channels WHERE url LIKE '%/live/%/%/%' LIMIT 1")
+        m = re.match(r"(https?://[^/]+)/live/([^/]+)/([^/]+)/", ch["url"]) if ch else None
+        if not m:
+            return
+        host, user, pw = m.groups()
+        try:
+            with urllib.request.urlopen(
+                    f"{host}/player_api.php?username={user}&password={pw}", timeout=10) as r:
+                info = json.load(r)
+            n = int(info.get("user_info", {}).get("max_connections") or 0)
+            if n > 0 and n != self.max_conn:
+                log.info("provider allows %d concurrent stream(s)", n)
+                self.max_conn = n
+        except Exception as e:
+            log.warning("connection-limit probe failed: %s", e)
+
+    def connections_in_use(self):
+        n = len(self.active)
+        n += sum(1 for s in live.sessions.values() if s.alive())
+        return n
+
+    def connection_limit_hit(self):
+        return bool(self.max_conn) and self.connections_in_use() >= self.max_conn
+
     def _tick(self):
         now = int(time.time())
+        if now - self._conn_probe > 600:
+            self._conn_probe = now
+            try:
+                self._detect_max_connections()
+            except Exception:
+                log.exception("connection probe failed")
         pre = config.get("pre_pad_min") * 60
         post = config.get("post_pad_min") * 60
         due = db.rows("SELECT * FROM schedules WHERE status='scheduled' AND start - ? <= ? AND stop + ? > ?",
                       (pre, now, post, now))
         for s in due:
+            if self.connection_limit_hit():
+                log.warning("schedule %s skipped: provider allows %d stream(s), all in use",
+                            s["id"], self.max_conn)
+                db.execute("UPDATE schedules SET status='failed' WHERE id=?", (s["id"],))
+                continue
             self._start(s, now, post)
         # Live buffers nobody is watching any more: stop them so they don't fill the SD card.
         idle = config.get("timeshift_idle_seconds")

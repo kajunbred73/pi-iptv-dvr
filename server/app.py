@@ -285,6 +285,11 @@ def api_timeshift():
         # Single viewer: changing channel abandons the previous (un-kept) live buffer right
         # away instead of letting several ffmpegs pile up on the Pi.
         streamer.recorder.stop_other_timeshifts()
+        if streamer.recorder.connection_limit_hit():
+            n = streamer.recorder.max_conn
+            return jsonify({"ok": False, "error": f"Your provider only allows {n} stream(s) at once "
+                            "and it is in use by a recording. Cancel the recording or upgrade "
+                            "your plan for more connections."}), 503
         if len(streamer.recorder.active) >= 4:
             return jsonify({"ok": False, "error": "Too many recordings in progress"}), 503
         if old:
