@@ -63,6 +63,8 @@ sub init()
     m.renameIdx = -1
     m.retryCount = 0
     m.retrying = false
+    m.autoRetunes = 0
+    m.playChannel = invalid
     m.finishPos = 0
     m.lastErr = ""
     m.lastSegs = 0
@@ -1317,6 +1319,7 @@ sub onVideoState()
         end if
         m.retryCount = 0
         m.retrying = false
+        m.autoRetunes = 0
     else if st = "error"
         if m.recordingId >= 0 and m.isLive and m.retryCount < 5 and not m.retrying
             m.retrying = true
@@ -1397,6 +1400,7 @@ sub onApiResponse(ev as Object)
             m.recordingId = r.recording_id
             m.streamUrl = r.stream_url
             m.playTitle = txt(m.pendingChannel.name)
+            m.playChannel = m.pendingChannel
             m.readyAttempts = 0
             m.readyTimer.control = "start"
         else
@@ -1437,8 +1441,16 @@ sub onApiResponse(ev as Object)
                 m.retryTimer.control = "start"
             end if
         else if txt(r.status) = "done"
-            ' The buffer is finalized: nothing more is coming, so don't loop the tail.
-            stopVideo(true)
+            ' The buffer finalized while we were watching (show boundary, kept-recording
+            ' end, unrecoverable drop). Retune the channel so TV rolls into the next
+            ' show instead of just stopping.
+            if m.autoRetunes < 3 and m.playChannel <> invalid
+                m.autoRetunes = m.autoRetunes + 1
+                m.pendingChannel = m.playChannel
+                api("/timeshift", "timeshift", "POST", FormatJson({ channel_id: m.playChannel.id }))
+            else
+                stopVideo(true)
+            end if
         else
             playError("The Pi stopped this channel's recording (" + txt(r.status) + "). " + txt(r.error))
         end if
