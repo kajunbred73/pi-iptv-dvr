@@ -35,6 +35,20 @@ function storeKeys() { return Object.keys(localStorage).filter(k => k.startsWith
 
 // ---------------------------------------------------------------- helpers
 
+// Debug overlay: open the page with ?debug=1 to log playback events on screen.
+const DEBUG = /[?&]debug/.test(location.search);
+let dbgEl = null;
+function dbg(msg) {
+  if (!DEBUG) return;
+  if (!dbgEl) {
+    dbgEl = document.createElement('div');
+    dbgEl.id = 'dbg';
+    document.body.appendChild(dbgEl);
+  }
+  const t = new Date().toLocaleTimeString();
+  dbgEl.textContent = (t + ' ' + msg + '\n' + dbgEl.textContent).split('\n').slice(0, 30).join('\n');
+}
+
 function txt(v) { return v == null ? '' : String(v); }
 
 function fmtDur(t) {
@@ -444,7 +458,12 @@ function setStream(url) {
     S.hls.loadSource(url);
     S.hls.attachMedia(video);
     S.hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+    S.hls.on(Hls.Events.FRAG_LOADED, (e, data) => {
+      const st = data.frag && data.frag.stats;
+      if (st) dbg(`seg ${data.frag.sn} ${(st.loading.end - st.loading.start) | 0}ms ${(data.frag.stats.total / 1024) | 0}KB`);
+    });
     S.hls.on(Hls.Events.ERROR, (e, data) => {
+      dbg(`hls ${data ? data.type + '/' + data.details : '?'} fatal=${data && data.fatal}`);
       if (!data || !data.fatal) return;
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { try { S.hls.recoverMediaError(); } catch (x) {} }
       else if (S.isLive && S.recordingId >= 0) rejoinCheck();
@@ -489,6 +508,8 @@ function playStream(url, title, isLive, startPos = 0) {
   }, 30000);
 }
 
+video.addEventListener('waiting', () => dbg('video waiting'));
+video.addEventListener('stalled', () => dbg('video stalled'));
 video.addEventListener('playing', () => {
   hideLoading();
   clearTimeout(S.playTimer);
@@ -524,8 +545,10 @@ setInterval(() => {
   const pos = video.currentTime;
   const buffered = video.buffered.length
     ? video.buffered.end(video.buffered.length - 1) - pos : 0;
+  dbg(`pos=${pos.toFixed(1)} buf=${buffered.toFixed(1)} dur=${isFinite(video.duration) ? video.duration.toFixed(0) : 'inf'} rs=${video.readyState}`);
   if (pos === lastPos && buffered < 1) {
     if (++stallTicks >= 3) {
+      dbg('STALL -> rejoin');
       stallTicks = 0;
       if (S.isLive && S.recordingId >= 0) rejoinCheck();
       else if (S.hls) { try { S.hls.startLoad(); } catch (e) {} }

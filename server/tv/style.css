@@ -92,3 +92,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0e14; c
   border-radius: 8px; }
 .dbtn.sel { background: #3d6bff; color: #fff; }
 .dbtn.spin { border: 3px solid #3d6bff; }
+
+/* debug overlay (?debug=1) */
+#dbg { position: fixed; top: 0; right: 0; width: 640px; max-height: 60%;
+  overflow: hidden; background: rgba(0,0,0,.85); color: #7fff9f;
+  font: 15px/1.4 monospace; padding: 10px 14px; white-space: pre-wrap; z-index: 99; }
