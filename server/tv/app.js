@@ -400,7 +400,7 @@ function startReadyPoll() {
 function onReady(r) {
   if (r.ready) {
     clearInterval(S.readyTimer);
-    const startPos = r.duration > 30 ? r.duration - 15 : r.duration > 20 ? r.duration - 10 : 0;
+    const startPos = r.duration > 60 ? r.duration - 45 : r.duration > 20 ? r.duration - 10 : 0;
     playStream(S.streamUrl, S.playTitle, true, startPos);
   } else if (r.status !== 'recording') {
     clearInterval(S.readyTimer);
@@ -445,7 +445,9 @@ function setStream(url) {
     // stream produces (Roku tolerates them, hls.js stalls on them).
     S.hls = new Hls({
       liveDurationInfinity: true,
-      liveSyncDurationCount: 4,
+      // Stay ~45s behind the edge: provider stalls that gap segment
+      // production get absorbed by the runway instead of freezing playback.
+      liveSyncDuration: 45,
       maxLiveSyncPlaybackRate: 1.5,
       maxBufferLength: 60,
       backBufferLength: 30,
@@ -458,10 +460,10 @@ function setStream(url) {
     S.hls.loadSource(url);
     S.hls.attachMedia(video);
     S.hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-    S.hls.on(Hls.Events.FRAG_LOADED, (e, data) => {
-      const st = data.frag && data.frag.stats;
-      if (st) dbg(`seg ${data.frag.sn} ${(st.loading.end - st.loading.start) | 0}ms ${(data.frag.stats.total / 1024) | 0}KB`);
-    });
+    S.hls.on(Hls.Events.FRAG_LOADED, (e, data) =>
+      dbg(`seg ${data.frag && data.frag.sn} loaded`));
+    S.hls.on(Hls.Events.LEVEL_LOADED, (e, data) =>
+      dbg(`playlist reload: ${data.details && data.details.totalduration | 0}s ${data.details && data.details.fragments.length} segs`));
     S.hls.on(Hls.Events.ERROR, (e, data) => {
       dbg(`hls ${data ? data.type + '/' + data.details : '?'} fatal=${data && data.fatal}`);
       if (!data || !data.fatal) return;
@@ -583,10 +585,12 @@ function rejoinCheck() {
 }
 
 function rejoinLive() {
-  const dur = video.duration;
   setStream(S.streamUrl);
   video.play().catch(() => {});
-  S.startPos = (isFinite(dur) && dur > 20) ? dur - 15 : Math.max(0, S.finishPos - 3);
+  // No explicit seek: for a live stream video.duration is Infinity, and a
+  // startPos computed from it jumps the viewer backwards. Let hls.js's
+  // liveSync (45s behind edge) place the position on the fresh manifest.
+  S.startPos = 0;
 }
 
 function stopVideo(clearResume = false) {
