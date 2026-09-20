@@ -426,7 +426,21 @@ function setStream(url) {
   if (video.canPlayType('application/vnd.apple.mpegurl')) {
     video.src = url;
   } else if (window.Hls && Hls.isSupported()) {
-    S.hls = new Hls({ liveDurationInfinity: true });
+    // Tuned for our EVENT playlists: deeper buffer absorbs provider stalls,
+    // maxBufferHole jumps over timestamp discontinuities the provider's TS
+    // stream produces (Roku tolerates them, hls.js stalls on them).
+    S.hls = new Hls({
+      liveDurationInfinity: true,
+      liveSyncDurationCount: 4,
+      maxLiveSyncPlaybackRate: 1.5,
+      maxBufferLength: 60,
+      backBufferLength: 30,
+      maxBufferHole: 2,
+      nudgeMaxRetry: 10,
+      fragLoadingMaxRetry: 6,
+      manifestLoadingMaxRetry: 6,
+      levelLoadingMaxRetry: 6,
+    });
     S.hls.loadSource(url);
     S.hls.attachMedia(video);
     S.hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
