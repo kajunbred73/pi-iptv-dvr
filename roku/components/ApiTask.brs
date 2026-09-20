@@ -30,11 +30,18 @@ sub doRequest()
         return
     end if
     code = msg.getResponseCode()
+    parsed = ParseJson(msg.getString())
     if code < 200 or code >= 300
-        m.top.error = "HTTP " + code.toStr() + ": " + msg.getFailureReason()
+        ' Most endpoints answer failures with {"ok": false, "error": "..."}; pass that
+        ' through so the real reason (e.g. provider stream limit) reaches the screen.
+        if parsed <> invalid and type(parsed) = "roAssociativeArray"
+            parsed.tag = m.top.tag
+            m.top.response = parsed
+        else
+            m.top.error = "HTTP " + code.toStr() + ": " + msg.getFailureReason()
+        end if
         return
     end if
-    parsed = ParseJson(msg.getString())
     if parsed = invalid
         m.top.error = "bad JSON from server"
         return

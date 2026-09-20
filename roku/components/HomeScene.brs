@@ -48,6 +48,7 @@ sub init()
     m.tasks = {}
     m.recordingId = -1
     m.vodId = -1
+    m.vodResume = 0
     m.playTitle = ""
     m.streamUrl = ""
     m.isLive = false
@@ -1404,7 +1405,9 @@ sub onRetry()
 end sub
 
 sub onReadyCheck()
-    if m.recordingId >= 0
+    if m.vodId >= 0
+        api("/vod/" + m.vodId.toStr() + "/ready", "readycheck")
+    else if m.recordingId >= 0
         api("/timeshift/" + m.recordingId.toStr() + "/ready", "readycheck")
     end if
 end sub
@@ -1425,7 +1428,7 @@ end sub
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
     if t.tag = "touch" then return
-    if t.tag = "timeshift" or t.tag = "readycheck" or t.tag = "rejoin"
+    if t.tag = "timeshift" or t.tag = "readycheck" or t.tag = "rejoin" or t.tag = "vodplay"
         m.readyTimer.control = "stop"
         playError("The Pi did not answer " + t.url + Chr(10) + t.error + Chr(10) + "If this says HTTP 404, the Pi is running old server code: cd pi-iptv-dvr && git pull && sudo systemctl restart pi-iptv-dvr")
         return
@@ -1457,6 +1460,34 @@ sub onApiResponse(ev as Object)
             playError("Could not start the live buffer: " + txt(r.error))
         end if
     else if tag = "readycheck"
+        if m.vodId >= 0
+            ' Movie muxer poll: play once a segment exists, fail if ffmpeg died first.
+            if r.ready = true or r.ready = 1
+                m.readyTimer.control = "stop"
+                if m.vodResume > 5
+                    showResumeDialog(m.streamUrl, m.playTitle, false, m.vodResume, -1)
+                else
+                    play(m.streamUrl, m.playTitle, false)
+                end if
+            else if r.alive <> true and r.alive <> 1
+                m.readyTimer.control = "stop"
+                if txt(r.error) <> ""
+                    playError("The Pi could not start this movie. ffmpeg said:" + Chr(10) + txt(r.error))
+                else
+                    playError("The movie stream stopped before it produced any video.")
+                end if
+            else
+                m.readyAttempts = m.readyAttempts + 1
+                if m.top.dialog <> invalid and m.top.dialog.loading = true
+                    m.top.dialog.title = "Loading movie... " + txt(r.segments) + " segments"
+                end if
+                if m.readyAttempts > 240
+                    m.readyTimer.control = "stop"
+                    playError("The movie still is not ready after 4 minutes. The provider may be too slow or the file unavailable.")
+                end if
+            end if
+            return
+        end if
         if r.ready = true or r.ready = 1
             m.readyTimer.control = "stop"
             ' Rejoining a buffer that was already recording (e.g. after a playback failure):
@@ -1588,12 +1619,13 @@ sub onApiResponse(ev as Object)
         setRows(labels, items, "No movies in this category.")
     else if tag = "vodplay"
         if r.ok = true or r.ok = 1
-            saved = readVodPos(m.vodId)
-            if saved > 5
-                showResumeDialog(r.stream_url, txt(r.title), false, saved, -1)
-            else
-                play(r.stream_url, txt(r.title), false)
-            end if
+            ' ffmpeg is muxing on the Pi; poll /ready like the live-buffer flow so a slow
+            ' provider (or a big file) can't trip the API task's 15 s timeout.
+            m.streamUrl = r.stream_url
+            m.playTitle = txt(r.title)
+            m.vodResume = readVodPos(m.vodId)
+            m.readyAttempts = 0
+            m.readyTimer.control = "start"
         else
             playError("Could not start the movie: " + txt(r.error))
         end if

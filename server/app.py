@@ -380,12 +380,42 @@ def api_vod_play(vid):
             return jsonify({"ok": False, "error": f"Your provider only allows {n} stream(s) at once "
                             "and it is in use. Stop the recording/live TV or upgrade your "
                             "plan for more connections."}), 503
+        # The killed buffer's socket takes a moment to close on the provider's side;
+        # spawning the movie ffmpeg instantly can get rejected.
+        time.sleep(1)
     s = streamer.vod.get(m)
-    if not s.wait_ready():
-        return jsonify({"ok": False, "error": "Stream did not start"}), 503
+    # Give ffmpeg a moment to fail fast on a bad URL; readiness itself is polled via
+    # /api/vod/<id>/ready so this response always beats the Roku's 15 s task timeout.
+    time.sleep(1.5)
+    if not s.alive() and not os.path.exists(s.playlist):
+        return jsonify({"ok": False, "error": "Stream did not start: " + s.last_error()}), 503
     return jsonify({"ok": True,
                     "stream_url": f"{_base_url()}/vod/{vid}/index.m3u8",
                     "title": m["name"]})
+
+
+@app.get("/api/vod/<int:vid>/ready")
+def api_vod_ready(vid):
+    """Polled by the Roku while a movie is being muxed (same flow as the live buffer)."""
+    s = streamer.vod.touch(vid) or abort(404)
+    try:
+        segs = len([f for f in os.listdir(s.dir) if f.endswith(".ts")])
+    except OSError:
+        segs = 0
+    ended = False
+    if not s.alive():
+        try:
+            ended = "#EXT-X-ENDLIST" in open(s.playlist).read()
+        except OSError:
+            pass
+    return jsonify({
+        "ok": True,
+        "ready": segs > 0,
+        "segments": segs,
+        "alive": s.alive(),
+        "ended": ended,
+        "error": s.last_error() if not s.alive() and not ended else "",
+    })
 
 
 @app.post("/api/vod/<int:vid>/touch")

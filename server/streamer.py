@@ -616,6 +616,15 @@ class VodSession:
             time.sleep(0.25)
         return False
 
+    def last_error(self):
+        """Last non-empty ffmpeg.log line (why muxing failed), or ''."""
+        try:
+            with open(os.path.join(self.dir, "ffmpeg.log"), errors="replace") as f:
+                lines = [l.strip() for l in f.read()[-4000:].splitlines() if l.strip()]
+        except OSError:
+            return ""
+        return lines[-1] if lines else ""
+
     def stop(self):
         log.info("vod stop id=%s", self.movie["id"])
         if self.alive():
