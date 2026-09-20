@@ -49,6 +49,8 @@ sub init()
     m.recordingId = -1
     m.vodId = -1
     m.vodResume = 0
+    m.vodOffset = 0
+    m.resumeIsVod = false
     m.playTitle = ""
     m.streamUrl = ""
     m.isLive = false
@@ -372,8 +374,15 @@ sub onContentSelected()
     else if m.mode = "vodlist"
         m.vodId = it.id
         m.playTitle = txt(it.name)
-        showLoading("Loading movie...")
-        api("/vod/" + it.id.toStr() + "/play", "vodplay", "POST", "{}")
+        saved = readVodPos(it.id)
+        if saved > 5
+            ' Ask first: the Pi starts muxing at the chosen position, so the pick
+            ' has to happen before the /play call.
+            m.resumeIsVod = true
+            showResumeDialog("", txt(it.name), false, saved, -1)
+        else
+            vodPlayStart(0)
+        end if
     else if m.mode = "teams"
         if it.action = "add" then
             promptTeamAdd()
@@ -1156,11 +1165,26 @@ sub onResumeDialog(ev as Object)
     d.close = true
     m.top.dialog = invalid
     idx = ev.getData()
-    if idx < 0 then return
+    if idx < 0
+        m.resumeIsVod = false
+        return
+    end if
     startPos = 0
     if idx = 0 then startPos = m.resumePos
+    if m.resumeIsVod
+        m.resumeIsVod = false
+        vodPlayStart(startPos)
+        return
+    end if
     m.recordingId = m.resumeRecordingId
     play(m.resumeUrl, m.resumeTitle, m.resumeLive, startPos)
+end sub
+
+' Start the movie mux on the Pi at the chosen position (resume point or 0).
+sub vodPlayStart(startPos as Float)
+    m.vodResume = startPos
+    showLoading("Loading movie...")
+    api("/vod/" + m.vodId.toStr() + "/play?pos=" + Int(startPos).toStr(), "vodplay", "POST", "{}")
 end sub
 
 ' Search hit a program (not a channel): offer watch/record for that airing.
@@ -1348,6 +1372,11 @@ sub stopVideo(clearResume = false)
         m.grid.translation = [470, 170]
         m.grid.scale = [1, 1]
     end if
+    if m.vodId >= 0
+        ' Release the provider connection and the muxed files on the Pi right away
+        ' instead of letting them sit until the idle reaper runs.
+        api("/vod/" + m.vodId.toStr() + "/stop", "vodstop", "POST", "")
+    end if
     m.recordingId = -1
     m.vodId = -1
     m.isLive = false
@@ -1464,11 +1493,11 @@ sub onApiResponse(ev as Object)
             ' Movie muxer poll: play once a segment exists, fail if ffmpeg died first.
             if r.ready = true or r.ready = 1
                 m.readyTimer.control = "stop"
-                if m.vodResume > 5
-                    showResumeDialog(m.streamUrl, m.playTitle, false, m.vodResume, -1)
-                else
-                    play(m.streamUrl, m.playTitle, false)
-                end if
+                ' The playlist starts at vodOffset (0 for a full mux, the resume point
+                ' for a seek-start), so the player's position is relative to that.
+                startPos = m.vodResume - m.vodOffset
+                if startPos < 0 then startPos = 0
+                play(m.streamUrl, m.playTitle, false, startPos)
             else if r.alive <> true and r.alive <> 1
                 m.readyTimer.control = "stop"
                 if txt(r.error) <> ""
@@ -1623,7 +1652,8 @@ sub onApiResponse(ev as Object)
             ' provider (or a big file) can't trip the API task's 15 s timeout.
             m.streamUrl = r.stream_url
             m.playTitle = txt(r.title)
-            m.vodResume = readVodPos(m.vodId)
+            m.vodOffset = 0
+            if r.offset <> invalid then m.vodOffset = r.offset
             m.readyAttempts = 0
             m.readyTimer.control = "start"
         else

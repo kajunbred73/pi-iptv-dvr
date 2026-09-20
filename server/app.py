@@ -370,20 +370,26 @@ def api_vod():
 def api_vod_play(vid):
     """Start muxing a movie to HLS and return its playlist URL once it has data."""
     m = db.row("SELECT * FROM vod WHERE id=?", (vid,)) or abort(404)
+    try:
+        pos = float(request.args.get("pos") or 0)
+    except ValueError:
+        pos = 0
     s = streamer.vod.sessions.get(vid)
     if s is None or not s.alive():
-        # Releasing an abandoned live buffer frees the provider connection for the movie;
-        # a kept/scheduled recording still wins and the user gets the limit message.
+        # Releasing an abandoned live buffer or another movie frees the provider
+        # connection; a kept/scheduled recording still wins and the user gets the
+        # limit message.
         streamer.recorder.stop_other_timeshifts()
+        streamer.vod.stop_others(vid)
         if streamer.recorder.connection_limit_hit():
             n = streamer.recorder.max_conn
             return jsonify({"ok": False, "error": f"Your provider only allows {n} stream(s) at once "
                             "and it is in use. Stop the recording/live TV or upgrade your "
                             "plan for more connections."}), 503
-        # The killed buffer's socket takes a moment to close on the provider's side;
+        # The killed streams' sockets take a moment to close on the provider's side;
         # spawning the movie ffmpeg instantly can get rejected.
         time.sleep(1)
-    s = streamer.vod.get(m)
+    s = streamer.vod.get(m, pos)
     # Give ffmpeg a moment to fail fast on a bad URL; readiness itself is polled via
     # /api/vod/<id>/ready so this response always beats the Roku's 15 s task timeout.
     time.sleep(1.5)
@@ -391,7 +397,16 @@ def api_vod_play(vid):
         return jsonify({"ok": False, "error": "Stream did not start: " + s.last_error()}), 503
     return jsonify({"ok": True,
                     "stream_url": f"{_base_url()}/vod/{vid}/index.m3u8",
-                    "title": m["name"]})
+                    "title": m["name"],
+                    "offset": s.start_at})
+
+
+@app.post("/api/vod/<int:vid>/stop")
+def api_vod_stop(vid):
+    """Viewer backed out of a movie: drop the muxer and its files right away so the
+    provider connection is free for whatever they pick next."""
+    streamer.vod.stop(vid)
+    return jsonify({"ok": True})
 
 
 @app.get("/api/vod/<int:vid>/ready")

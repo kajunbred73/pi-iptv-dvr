@@ -26,7 +26,7 @@ def _input_url(url):
     return url
 
 
-def _input_args(url):
+def _input_args(url, start_at=0):
     url = _input_url(url)
     # IPTV feeds are full of corrupt packets and timestamp jumps; drop the junk and let ffmpeg
     # regenerate timestamps so the copied-through output stays monotonic (otherwise the Roku
@@ -46,6 +46,10 @@ def _input_args(url):
                  "-user_agent", config.get("user_agent")]
     else:
         args += ["-re"]  # local files: read in real time
+    if start_at > 0:
+        # Input-side seek: for seekable files (mp4/mkv over HTTP range requests)
+        # ffmpeg jumps straight to the byte offset instead of re-downloading.
+        args += ["-ss", str(int(start_at))]
     args += ["-i", url]
     return args
 
@@ -584,17 +588,24 @@ class VodSession:
     ffmpeg reads as fast as the provider serves it, so the muxed portion
     runs well ahead of playback."""
 
-    def __init__(self, movie):
+    def __init__(self, movie, start_at=0):
         self.movie = movie
+        self.start_at = start_at
         self.dir = os.path.join(config.get("vod_dir"), str(movie["id"]))
         self.playlist = os.path.join(self.dir, "index.m3u8")
         self.proc = None
         self.last_access = time.time()
 
     def start(self):
+        if self.alive():
+            self.proc.terminate()
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir, exist_ok=True)
-        cmd = [FFMPEG] + _input_args(self.movie["url"]) + _copy_args() + [
+        cmd = [FFMPEG] + _input_args(self.movie["url"], self.start_at) + _copy_args() + [
             "-f", "hls", "-hls_time", "6", "-hls_list_size", "0",
             "-hls_playlist_type", "event",
             "-hls_segment_filename", os.path.join(self.dir, "seg%05d.ts"),
@@ -651,25 +662,42 @@ class VodManager:
             shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d, exist_ok=True)
 
-    def get(self, movie):
+    def get(self, movie, start_at=0):
         vid = movie["id"]
         with self.lock:
             s = self.sessions.get(vid)
             if s is None:
-                s = VodSession(movie)
+                s = VodSession(movie, start_at)
                 s.start()
                 self.sessions[vid] = s
-            elif not s.alive():
-                # A finished proc left a complete file on disk (ENDLIST); a proc that
-                # died mid-mux did not, so restart it fresh.
-                try:
-                    ended = "#EXT-X-ENDLIST" in open(s.playlist).read()
-                except OSError:
-                    ended = False
-                if not ended:
+            else:
+                complete = False
+                if not s.alive():
+                    # A finished proc left a complete file on disk (ENDLIST).
+                    try:
+                        complete = "#EXT-X-ENDLIST" in open(s.playlist).read()
+                    except OSError:
+                        pass
+                if start_at + 30 < s.start_at or (not s.alive() and not complete):
+                    # Viewer wants an earlier point than this mux covers, or the
+                    # muxer died mid-file: restart at the requested position.
+                    s.start_at = max(0, start_at)
                     s.start()
             s.last_access = time.time()
         return s
+
+    def stop(self, vid):
+        with self.lock:
+            s = self.sessions.pop(vid, None)
+        if s:
+            s.stop()
+
+    def stop_others(self, keep_vid):
+        """Single viewer: starting one movie abandons any other muxed/muxing movie."""
+        with self.lock:
+            victims = [self.sessions.pop(v) for v in list(self.sessions) if v != keep_vid]
+        for s in victims:
+            s.stop()
 
     def touch(self, vid):
         s = self.sessions.get(vid)
