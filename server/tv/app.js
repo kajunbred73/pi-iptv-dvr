@@ -88,13 +88,13 @@ function toast(msg) { $('detail').textContent = msg; }
 
 function renderMenu() {
   $('menu').innerHTML = S.tabs.map((t, i) =>
-    `<div class="menuitem ${i === S.menuFocus && S.focus === 'menu' ? 'sel' : ''}">${t}</div>`).join('');
+    `<div class="menuitem ${i === S.menuFocus && S.focus === 'menu' ? 'sel' : ''}" data-i="${i}">${t}</div>`).join('');
 }
 
 function setRows(labels, items, emptyText = 'Nothing here yet') {
   S.items = items;
   $('content').innerHTML = labels.map((l, i) =>
-    `<div class="row ${i === S.contentIdx && S.focus === 'content' ? 'sel' : ''}">${esc(l)}</div>`).join('');
+    `<div class="row ${i === S.contentIdx && S.focus === 'content' ? 'sel' : ''}" data-i="${i}">${esc(l)}</div>`).join('');
   $('empty').textContent = labels.length ? '' : emptyText;
   $('grid').innerHTML = '';
   S.contentIdx = Math.min(S.contentIdx, Math.max(0, labels.length - 1));
@@ -698,7 +698,19 @@ function showMsg(title, msg, buttons = ['OK'], cb = null) {
 function renderDialogButtons(buttons) {
   S.dialogButtons = buttons;
   $('dialog-buttons').innerHTML = buttons.map((b, i) =>
-    `<div class="dbtn ${i === S.dialogBtnIdx ? 'sel' : ''}">${esc(b)}</div>`).join('');
+    `<div class="dbtn ${i === S.dialogBtnIdx ? 'sel' : ''}" data-i="${i}">${esc(b)}</div>`).join('');
+}
+
+// Shared by Enter key and mouse/TV-cursor click.
+function dialogChoose(idx) {
+  const inp = $('dialog-input');
+  if (!inp.classList.contains('hidden') && idx === 0) {
+    const cb = S.dialogInputCb, v = inp.value.trim();
+    closeDialog(); cb && cb(v);
+    return;
+  }
+  const cb = S.dialogCb;
+  closeDialog(); cb && cb(idx);
 }
 function closeDialog() {
   $('dialog').classList.add('hidden');
@@ -816,7 +828,7 @@ function promptServer() {
 
 function buildMenuBar() {
   $('menubar').innerHTML = S.tabs.map((t, i) =>
-    `<div class="baritem ${i === S.overlayTab ? 'sel' : ''} ${i === S.barFocus && S.overlayFocus === 'menubar' ? 'focus' : ''}">${t}</div>`).join('');
+    `<div class="baritem ${i === S.overlayTab ? 'sel' : ''} ${i === S.barFocus && S.overlayFocus === 'menubar' ? 'focus' : ''}" data-i="${i}">${t}</div>`).join('');
 }
 
 function showOverlay() {
@@ -921,7 +933,7 @@ function overlayList(labels, items, onSel = null) {
 }
 function renderOverlayList(labels) {
   $('overlay-pane').innerHTML = labels.map((l, i) =>
-    `<div class="row ${i === ovIdx ? 'sel' : ''}">${esc(l)}</div>`).join('');
+    `<div class="row ${i === ovIdx ? 'sel' : ''}" data-i="${i}">${esc(l)}</div>`).join('');
   const sel = $('overlay-pane').querySelector('.row.sel');
   if (sel) sel.scrollIntoView({ block: 'nearest' });
 }
@@ -1006,13 +1018,8 @@ document.addEventListener('keydown', e => {
     }
     if (k === 'ArrowLeft') { S.dialogBtnIdx = Math.max(0, S.dialogBtnIdx - 1); renderDialogButtons(S.dialogButtons); }
     else if (k === 'ArrowRight') { S.dialogBtnIdx = Math.min(S.dialogButtons.length - 1, S.dialogBtnIdx + 1); renderDialogButtons(S.dialogButtons); }
-    else if (k === 'Enter') {
-      const inp = $('dialog-input');
-      if (!inp.classList.contains('hidden') && S.dialogBtnIdx === 0) {
-        const cb = S.dialogInputCb; const v = inp.value.trim(); closeDialog(); cb && cb(v); return;
-      }
-      const cb = S.dialogCb; closeDialog(); cb && cb(S.dialogBtnIdx);
-    } else if (k === 'Backspace' || c === TIZEN_BACK || k === 'Escape') {
+    else if (k === 'Enter') dialogChoose(S.dialogBtnIdx);
+    else if (k === 'Backspace' || c === TIZEN_BACK || k === 'Escape') {
       closeDialog();
       if (S.dialogInputCb) { S.dialogInputCb = null; }
     }
@@ -1133,6 +1140,63 @@ function selectNow() {
   if (S.focus === 'content') selectFocused();
   else if (S.focus === 'grid') gridSelect();
 }
+
+// ---------------------------------------------------------------- pointer / TV-cursor clicks
+// The Samsung TV browser's remote drives a mouse cursor and OK = click, not a
+// keydown. Every interactive element carries data-i so one delegated handler
+// covers clicks for both the TV browser and a desktop mouse.
+
+document.addEventListener('click', e => {
+  const t = e.target;
+
+  const db = t.closest('.dbtn');
+  if (db && S.focus === 'dialog') { dialogChoose(+db.dataset.i); return; }
+
+  const mi = t.closest('.menuitem');
+  if (mi) {
+    S.menuFocus = S.menuIdx = +mi.dataset.i;
+    showTab(S.menuIdx);
+    S.focus = S.mode === 'grid' ? 'grid' : 'content';
+    renderMenu(); markSel();
+    return;
+  }
+
+  const bar = t.closest('.baritem');
+  if (bar && S.overlay) { applyOverlayTab(+bar.dataset.i); return; }
+
+  const gc = t.closest('.gcell');
+  if (gc) {
+    const inOverlay = !!gc.closest('#overlay-pane');
+    S.gridRow = +gc.dataset.ri; S.gridCol = +gc.dataset.ci;
+    updateGridSel();
+    if (inOverlay) hideOverlay();
+    gridSelect();
+    return;
+  }
+  const gch = t.closest('.gchan');
+  if (gch) {
+    const inOverlay = !!gch.closest('#overlay-pane');
+    S.gridRow = +gch.dataset.ri; S.gridCol = -1;
+    updateGridSel();
+    if (inOverlay) hideOverlay();
+    gridSelect();
+    return;
+  }
+
+  const orow = t.closest('#overlay-pane .row');
+  if (orow) { ovIdx = +orow.dataset.i; if (ovSelect) ovSelect(ovIdx); return; }
+
+  const crow = t.closest('#content .row');
+  if (crow) {
+    S.contentIdx = +crow.dataset.i;
+    S.focus = 'content';
+    markSel();
+    selectFocused();
+    return;
+  }
+
+  if (t.closest('#video') && video.classList.contains('playing')) trickMenu();
+});
 
 // ---------------------------------------------------------------- boot
 

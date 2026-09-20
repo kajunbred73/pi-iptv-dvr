@@ -3,6 +3,7 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0b0e1
   font-family: "SamsungOne", "Segoe UI", Arial, sans-serif; }
 
 #app { position: absolute; inset: 0; display: flex; }
+.menuitem, .row, .gcell, .gchan, .dbtn, .baritem { cursor: pointer; }
 #menu { width: 260px; background: #11151f; padding-top: 40px; }
 .menuitem { padding: 18px 24px; font-size: 28px; color: #aab3c5; }
 .menuitem.sel { background: #3d6bff; color: #fff; }
