@@ -25,7 +25,7 @@ sub init()
     m.playTimer.observeField("fire", "onPlayTimeout")
     m.statusTimer = m.top.findNode("statusTimer")
 
-    m.tabs = ["Favorites", "Guide", "Search", "Categories", "Movies", "Sports Teams", "Recordings", "Scheduled", "Settings"]
+    m.tabs = ["Favorites", "Guide", "Recent", "Search", "Categories", "Movies", "Sports Teams", "Recordings", "Scheduled", "Settings"]
     m.menu.content = makeList(m.tabs)
     m.menu.observeField("itemFocused", "onMenuFocused")
     m.menu.observeField("itemSelected", "onMenuSelected")
@@ -267,6 +267,10 @@ sub showTab(idx as Integer)
         else
             setRows([], [], "Press OK to search channels and shows (e.g. ABC, ESPN, Astros).")
         end if
+    else if tabName = "Recent"
+        m.mode = "recent"
+        m.hint.text = "OK: watch   *: remove"
+        renderRecents()
     else if tabName = "Categories"
         m.mode = "categories"
         m.hint.text = "OK: open category guide"
@@ -340,6 +344,12 @@ sub onContentFocused()
         m.detail.text = txt(it.count) + " movies"
     else if m.mode = "vodlist"
         m.detail.text = txt(it.grp)
+    else if m.mode = "recent"
+        if it.kind = "movie"
+            m.detail.text = "Movie"
+        else
+            m.detail.text = txt(it.title)
+        end if
     else if m.mode = "recordings"
         m.detail.text = txt(it.description)
     else if m.mode = "teams"
@@ -374,16 +384,12 @@ sub onContentSelected()
         m.hint.text = "OK: play movie   *: clear resume mark   Back: menu"
         api("/vod?group=" + urlEnc(txt(it.name)), "vodlist")
     else if m.mode = "vodlist"
-        m.vodId = it.id
-        m.playTitle = txt(it.name)
-        saved = readVodPos(it.id)
-        if saved > 5
-            ' Ask first: the Pi starts muxing at the chosen position, so the pick
-            ' has to happen before the /play call.
-            m.resumeIsVod = true
-            showResumeDialog("", txt(it.name), false, saved, -1)
+        selectVodItem(it)
+    else if m.mode = "recent"
+        if it.kind = "movie"
+            selectVodItem(it)
         else
-            vodPlayStart(0)
+            playChannel({ id: it.id, name: it.name })
         end if
     else if m.mode = "teams"
         if it.action = "add" then
@@ -675,6 +681,9 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
                 return true
             else if m.mode = "vodlist"
                 clearVodResume()
+                return true
+            else if m.mode = "recent"
+                removeRecentFocused()
                 return true
             end if
         else if m.menu.hasFocus() and m.tabs[m.menu.itemFocused] = "Search"
@@ -1013,7 +1022,7 @@ sub buildMenuBar()
     m.barSel.height = 3
     m.barSel.color = "#3D6BFF"
     m.menuBar.appendChild(m.barSel)
-    widths = [130, 85, 95, 140, 110, 150, 140, 125, 110]
+    widths = [130, 85, 100, 95, 140, 110, 150, 140, 125, 110]
     x = 0
     for i = 0 to m.tabs.count() - 1
         w = 100
@@ -1077,6 +1086,10 @@ sub applyOverlayTab(idx as Integer)
         if tabName = "Search"
             m.mode = "list"
             promptSearch()
+        else if tabName = "Recent"
+            m.mode = "recent"
+            renderRecents()
+            m.content.setFocus(true)
         else if tabName = "Categories"
             m.mode = "categories"
             api("/groups", "groups")
@@ -1193,6 +1206,71 @@ sub onResumeDialog(ev as Object)
     end if
     m.recordingId = m.resumeRecordingId
     play(m.resumeUrl, m.resumeTitle, m.resumeLive, startPos)
+end sub
+
+' Shared by the Movies list and the Recent tab.
+sub selectVodItem(it as Object)
+    m.vodId = it.id
+    m.playTitle = txt(it.name)
+    saved = readVodPos(it.id)
+    if saved > 5
+        ' Ask first: the Pi starts muxing at the chosen position, so the pick
+        ' has to happen before the /play call.
+        m.resumeIsVod = true
+        showResumeDialog("", txt(it.name), false, saved, -1)
+    else
+        vodPlayStart(0)
+    end if
+end sub
+
+' ------------------------------------------------------------------ recently watched
+
+function loadRecents() as Object
+    s = m.reg.read("recent")
+    if s = invalid or s = "" then return []
+    arr = ParseJson(s)
+    if type(arr) <> "roArray" then return []
+    return arr
+end function
+
+sub addRecent(item as Object)
+    ' Dedupe by kind+id, put the newest at the top, cap the list.
+    recents = []
+    for each r in loadRecents()
+        if not (r.id = item.id and r.kind = item.kind) then recents.push(r)
+    end for
+    recents.unshift(item)
+    while recents.count() > 15
+        recents.pop()
+    end while
+    m.reg.write("recent", FormatJson(recents))
+    m.reg.flush()
+end sub
+
+function recentLabel(r as Object) as String
+    if r.kind = "movie" then return "MOVIE   " + txt(r.name)
+    line = txt(r.name)
+    if txt(r.title) <> "" then line = line + "   -   " + txt(r.title)
+    return line
+end function
+
+sub renderRecents()
+    m.items = loadRecents()
+    labels = []
+    for each r in m.items
+        labels.push(recentLabel(r))
+    end for
+    setRows(labels, m.items, "Nothing watched yet. Tune a channel or play a movie and it shows up here.")
+end sub
+
+sub removeRecentFocused()
+    i = m.content.itemFocused
+    if i < 0 or i >= m.items.count() then return
+    m.items.delete(i)
+    m.reg.write("recent", FormatJson(m.items))
+    m.reg.flush()
+    renderRecents()
+    toast("Removed")
 end sub
 
 ' * key on a movie: forget its saved position so it starts from the beginning.
@@ -1509,6 +1587,7 @@ sub onApiResponse(ev as Object)
             m.streamUrl = r.stream_url
             m.playTitle = txt(m.pendingChannel.name)
             m.playChannel = m.pendingChannel
+            addRecent({ kind: "channel", id: m.pendingChannel.id, name: txt(m.pendingChannel.name), title: txt(r.title) })
             m.readyAttempts = 0
             m.readyTimer.control = "start"
         else
@@ -1680,6 +1759,7 @@ sub onApiResponse(ev as Object)
             m.playTitle = txt(r.title)
             m.vodOffset = 0
             if r.offset <> invalid then m.vodOffset = r.offset
+            addRecent({ kind: "movie", id: m.vodId, name: m.playTitle })
             m.readyAttempts = 0
             m.readyTimer.control = "start"
         else
