@@ -326,12 +326,13 @@ def api_timeshift_ready(rid):
     """ready=true once enough HLS segments exist for the Roku to start without hitting the end of
     the playlist (which is what made playback stutter/loop with a single segment)."""
     rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,)) or abort(404)
-    segs, ended = streamer.recorder.segments(rid)
+    segs, ended, dur = streamer.recorder.segments(rid)
     streamer.recorder.touch_timeshift(rid)
     return jsonify({
         "ok": True,
         "ready": segs >= config.get("timeshift_min_segments") or (ended and segs > 0),
         "segments": segs,
+        "duration": dur,
         "status": rec["status"],
         "error": streamer.recorder.last_error(rid) if rec["status"] != "recording" else "",
         "stream_url": f"{_base_url()}/recordings/{rid}/index.m3u8",

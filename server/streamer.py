@@ -481,23 +481,24 @@ class Recorder:
         return lines[-1] if lines else ""
 
     def segments(self, rid):
-        """(segment count, playlist finished?) for a recording's HLS playlist."""
+        """(segment count, playlist finished?, buffered seconds) for a recording's HLS playlist."""
         rec = db.row("SELECT path, status FROM recordings WHERE id=?", (rid,))
         if not rec:
-            return 0, False
+            return 0, False, 0.0
         out_dir = os.path.join(config.get("recordings_dir"), rec["path"])
         pl = os.path.join(out_dir, "index.m3u8")
         try:
             with open(pl) as f:
                 text = f.read()
         except OSError:
-            return 0, False
+            return 0, False, 0.0
         if "#EXTINF" not in text and rec["status"] != "recording" and "#EXT-X-REBUILT" not in text:
             segs = [f for f in os.listdir(out_dir) if f.endswith(".ts")]
             if segs:
                 _rebuild_playlist(out_dir, segs)
                 text = open(pl).read()
-        return text.count("#EXTINF"), "#EXT-X-ENDLIST" in text
+        dur = sum(float(x) for x in re.findall(r"#EXTINF:([\d.]+)", text))
+        return text.count("#EXTINF"), "#EXT-X-ENDLIST" in text, dur
 
 
 recorder = Recorder()

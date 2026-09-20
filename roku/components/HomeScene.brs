@@ -1311,7 +1311,7 @@ sub onVideoState()
         hideLoading()
         m.playTimer.control = "stop"
         focusVideo()
-        if not m.isLive and m.startPos > 0
+        if m.startPos > 0
             m.video.seek = m.startPos
             m.startPos = 0
         end if
@@ -1405,7 +1405,11 @@ sub onApiResponse(ev as Object)
     else if tag = "readycheck"
         if r.ready = true or r.ready = 1
             m.readyTimer.control = "stop"
-            play(m.streamUrl, m.playTitle, true)
+            ' Rejoining a buffer that was already recording (e.g. after a playback failure):
+            ' start near the live edge instead of replaying from position 0.
+            startPos = 0
+            if r.duration <> invalid and r.duration > 20 then startPos = r.duration - 10
+            play(m.streamUrl, m.playTitle, true, startPos)
         else if txt(r.status) <> "recording"
             m.readyTimer.control = "stop"
             playError("The Pi could not open this channel's stream. ffmpeg said:" + Chr(10) + txt(r.error))
@@ -1426,7 +1430,7 @@ sub onApiResponse(ev as Object)
         if txt(r.status) = "recording" or (r.ready = true)
             ' Only reload once the buffer actually grew past where we stopped (~2+ new
             ' segments); reloading immediately just re-finished and burned the retries.
-            if (r.segments * 3.0) > m.finishPos + 6
+            if r.duration <> invalid and r.duration > m.finishPos + 6
                 rejoinLive()
             else
                 m.retrying = true
