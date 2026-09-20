@@ -544,6 +544,51 @@ def recording_file(rid, fname):
     return resp
 
 
+@app.get("/recordings/<int:rid>/live.m3u8")
+def recording_live_window(rid):
+    """Sliding-window HLS view of a timeshift buffer for browser clients.
+
+    ffmpeg writes an EVENT playlist that grows forever — fine for Roku, but
+    hls.js tracks sliding-window live playlists much more reliably. Same
+    segment files, last ~3 min window, correct MEDIA-SEQUENCE."""
+    rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,)) or abort(404)
+    pl = os.path.join(config.get("recordings_dir"), rec["path"], "index.m3u8")
+    try:
+        lines = open(pl).read().splitlines()
+    except OSError:
+        abort(404)
+    head, segs, ended = [], [], False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("#EXTINF") and i + 1 < len(lines):
+            segs.append((lines[i], lines[i + 1]))
+            i += 1
+        elif line.startswith("#EXT-X-ENDLIST"):
+            ended = True
+        elif not segs:
+            head.append(line)
+        i += 1
+    win = segs[-60:]
+    seq = len(segs) - len(win)
+    out = []
+    for line in head:
+        if line.startswith("#EXT-X-MEDIA-SEQUENCE"):
+            out.append(f"#EXT-X-MEDIA-SEQUENCE:{seq}")
+        elif not line.startswith("#EXT-X-PLAYLIST-TYPE"):
+            out.append(line)
+    if not any(l.startswith("#EXT-X-MEDIA-SEQUENCE") for l in out):
+        out.append(f"#EXT-X-MEDIA-SEQUENCE:{seq}")
+    for a, b in win:
+        out += [a, b]
+    if ended:
+        out.append("#EXT-X-ENDLIST")
+    resp = app.response_class("\n".join(out) + "\n", mimetype="application/vnd.apple.mpegurl")
+    resp.headers["Cache-Control"] = "no-cache"
+    streamer.recorder.touch_timeshift(rid)
+    return resp
+
+
 @app.get("/vod/<int:vid>/<path:fname>")
 def vod_file(vid, fname):
     s = streamer.vod.touch(vid) or abort(404)

@@ -467,6 +467,10 @@ function loadHlsJs(done) {
 }
 
 function playStream(url, title, isLive, startPos = 0) {
+  // Live buffers play through the sliding-window view — hls.js syncs a normal
+  // live playlist far better than the ffmpeg EVENT playlist (which stalled
+  // every ~10s); the recording itself is unchanged.
+  if (isLive) url = url.replace(/index\.m3u8$/, 'live.m3u8');
   S.streamUrl = url; S.playTitle = title; S.isLive = isLive; S.startPos = startPos;
   S.retryCount = 0; S.finishPos = 0;
   setStream(url);
