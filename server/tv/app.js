@@ -386,7 +386,7 @@ function startReadyPoll() {
 function onReady(r) {
   if (r.ready) {
     clearInterval(S.readyTimer);
-    const startPos = r.duration > 20 ? r.duration - 10 : 0;
+    const startPos = r.duration > 30 ? r.duration - 15 : r.duration > 20 ? r.duration - 10 : 0;
     playStream(S.streamUrl, S.playTitle, true, startPos);
   } else if (r.status !== 'recording') {
     clearInterval(S.readyTimer);
@@ -430,6 +430,12 @@ function setStream(url) {
     S.hls.loadSource(url);
     S.hls.attachMedia(video);
     S.hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+    S.hls.on(Hls.Events.ERROR, (e, data) => {
+      if (!data || !data.fatal) return;
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { try { S.hls.recoverMediaError(); } catch (x) {} }
+      else if (S.isLive && S.recordingId >= 0) rejoinCheck();
+      else showMsg("Can't play", 'Stream error while playing.');
+    });
   } else {
     loadHlsJs(() => setStream(url));
   }
@@ -489,6 +495,30 @@ video.addEventListener('ended', () => {
   }
 });
 
+// Stall watchdog: a live buffer freeze at the playlist edge fires no 'error'
+// or 'ended' — playback just hangs. Detect "position frozen + no buffered
+// runway" and rejoin, which is what 'Jump to live' did manually.
+let lastPos = -1, stallTicks = 0;
+setInterval(() => {
+  if (!video.classList.contains('playing') || video.paused || S.focus === 'dialog') {
+    lastPos = -1; stallTicks = 0; return;
+  }
+  const pos = video.currentTime;
+  const buffered = video.buffered.length
+    ? video.buffered.end(video.buffered.length - 1) - pos : 0;
+  if (pos === lastPos && buffered < 1) {
+    if (++stallTicks >= 3) {
+      stallTicks = 0;
+      if (S.isLive && S.recordingId >= 0) rejoinCheck();
+      else if (S.hls) { try { S.hls.startLoad(); } catch (e) {} }
+      else video.currentTime = pos + 0.5;
+    }
+  } else {
+    stallTicks = 0;
+  }
+  lastPos = pos;
+}, 2000);
+
 function rejoinCheck() {
   api(`/timeshift/${S.recordingId}/ready`, r => {
     if (!video.classList.contains('playing')) return;
@@ -515,7 +545,7 @@ function rejoinLive() {
   const dur = video.duration;
   setStream(S.streamUrl);
   video.play().catch(() => {});
-  S.startPos = (isFinite(dur) && dur > 15) ? dur - 10 : Math.max(0, S.finishPos - 3);
+  S.startPos = (isFinite(dur) && dur > 20) ? dur - 15 : Math.max(0, S.finishPos - 3);
 }
 
 function stopVideo(clearResume = false) {
