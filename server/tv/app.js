@@ -457,7 +457,7 @@ function playStream(url, title, isLive, startPos = 0) {
   renderMenu(); markSel();
   $('osd').classList.add('show');
   $('osd-title').textContent = title;
-  $('osd-hint').textContent = 'OK/Down: controls   Up: menu   Back: stop   FF/RW: ±30s';
+  $('osd-hint').textContent = 'Click/OK: controls   Up: menu   Back: stop   FF/RW: ±30s';
   clearTimeout(S.playTimer);
   S.playTimer = setTimeout(() => {
     if (video.classList.contains('playing') && video.paused && !video.currentTime)
@@ -556,6 +556,7 @@ function trickMenu() {
     ? ['Play', 'Back 30s', 'Forward 30s']
     : ['Pause', 'Back 30s', 'Forward 30s'];
   if (S.isLive) { btns.push('Jump to live', 'Keep recording'); }
+  btns.push('Channel menu', 'Stop watching');
   showMsg(S.playTitle, info, btns, idx => {
     const a = btns[idx];
     if (a === 'Pause') video.pause();
@@ -564,6 +565,8 @@ function trickMenu() {
     else if (a === 'Forward 30s') video.currentTime = video.currentTime + 30;
     else if (a === 'Jump to live') rejoinLive();
     else if (a === 'Keep recording') api(`/timeshift/${S.recordingId}/keep`, () => toast('Recording saved'), 'POST', '');
+    else if (a === 'Channel menu') { S.focus = 'video'; showOverlay(); }
+    else if (a === 'Stop watching') stopVideo();
   });
 }
 
@@ -1197,6 +1200,19 @@ document.addEventListener('click', e => {
 
   if (t.closest('#video') && video.classList.contains('playing')) trickMenu();
 });
+
+// Trap the browser Back button (what the TV remote's Back sends in browser
+// mode) so it acts as in-app Back instead of navigating away from the page.
+try {
+  history.pushState({ iptv: true }, '');
+  window.addEventListener('popstate', () => {
+    history.pushState({ iptv: true }, '');
+    if (S.focus === 'dialog') closeDialog();
+    else if (S.overlay) hideOverlay();
+    else if (video.classList.contains('playing')) stopVideo();
+    else if (S.focus !== 'menu') { S.focus = 'menu'; renderMenu(); }
+  });
+} catch (e) {}
 
 // ---------------------------------------------------------------- boot
 
