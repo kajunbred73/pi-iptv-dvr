@@ -237,6 +237,7 @@ class Recorder:
     def connections_in_use(self):
         n = len(self.active)
         n += sum(1 for s in live.sessions.values() if s.alive())
+        n += sum(1 for s in vod.sessions.values() if s.alive())
         return n
 
     def connection_limit_hit(self):
@@ -572,7 +573,119 @@ class Recorder:
 recorder = Recorder()
 
 
+# ---------------------------------------------------------------- VOD
+
+class VodSession:
+    """ffmpeg remux of a movie into a growing HLS playlist on disk.
+
+    Same pipeline as recordings (video copy, audio -> AAC-LC so AC3/DTS/EAC3
+    sources play on Roku), but keeps every segment and writes EXT-X-ENDLIST
+    once the whole file is muxed, so the Roku gets a seekable VOD asset.
+    ffmpeg reads as fast as the provider serves it, so the muxed portion
+    runs well ahead of playback."""
+
+    def __init__(self, movie):
+        self.movie = movie
+        self.dir = os.path.join(config.get("vod_dir"), str(movie["id"]))
+        self.playlist = os.path.join(self.dir, "index.m3u8")
+        self.proc = None
+        self.last_access = time.time()
+
+    def start(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+        os.makedirs(self.dir, exist_ok=True)
+        cmd = [FFMPEG] + _input_args(self.movie["url"]) + _copy_args() + [
+            "-f", "hls", "-hls_time", "6", "-hls_list_size", "0",
+            "-hls_playlist_type", "event",
+            "-hls_segment_filename", os.path.join(self.dir, "seg%05d.ts"),
+            self.playlist]
+        log.info("vod start id=%s '%s'", self.movie["id"], self.movie["name"])
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                     stderr=open(os.path.join(self.dir, "ffmpeg.log"), "ab"))
+
+    def alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def wait_ready(self, timeout=20):
+        end = time.time() + timeout
+        while time.time() < end:
+            if os.path.exists(self.playlist) and ".ts" in open(self.playlist).read():
+                return True
+            if self.proc and self.proc.poll() is not None:
+                return os.path.exists(self.playlist)
+            time.sleep(0.25)
+        return False
+
+    def stop(self):
+        log.info("vod stop id=%s", self.movie["id"])
+        if self.alive():
+            self.proc.terminate()
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+class VodManager:
+    def __init__(self):
+        self.sessions = {}   # vod.id -> VodSession
+        self.lock = threading.Lock()
+
+    def start(self):
+        threading.Thread(target=self._reaper, daemon=True).start()
+
+    def cleanup(self):
+        """Drop leftover movie dirs from a previous run."""
+        d = config.get("vod_dir")
+        if os.path.isdir(d):
+            shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d, exist_ok=True)
+
+    def get(self, movie):
+        vid = movie["id"]
+        with self.lock:
+            s = self.sessions.get(vid)
+            if s is None:
+                s = VodSession(movie)
+                s.start()
+                self.sessions[vid] = s
+            elif not s.alive():
+                # A finished proc left a complete file on disk (ENDLIST); a proc that
+                # died mid-mux did not, so restart it fresh.
+                try:
+                    ended = "#EXT-X-ENDLIST" in open(s.playlist).read()
+                except OSError:
+                    ended = False
+                if not ended:
+                    s.start()
+            s.last_access = time.time()
+        return s
+
+    def touch(self, vid):
+        s = self.sessions.get(vid)
+        if s:
+            s.last_access = time.time()
+        return s
+
+    def _reaper(self):
+        while True:
+            time.sleep(20)
+            idle = int(config.get("vod_idle_seconds"))
+            with self.lock:
+                for vid, s in list(self.sessions.items()):
+                    if time.time() - s.last_access > idle:
+                        s.stop()
+                        del self.sessions[vid]
+                        log.info("vod idle, removed id=%s", vid)
+
+
+vod = VodManager()
+
+
 def start():
+    vod.cleanup()
+    vod.start()
     live.start()
     recorder.start()
 

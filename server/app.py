@@ -344,6 +344,56 @@ def api_timeshift_ready(rid):
     })
 
 
+@app.get("/api/vod/groups")
+def api_vod_groups():
+    """Movie categories with counts."""
+    return jsonify(db.rows("SELECT grp AS name, COUNT(*) AS count FROM vod "
+                           "GROUP BY grp ORDER BY grp"))
+
+
+@app.get("/api/vod")
+def api_vod():
+    """Movies, optionally filtered by ?group= / ?q= (bounded for the Roku)."""
+    clauses, args = [], []
+    if request.args.get("group") is not None:
+        clauses.append("grp=?")
+        args.append(request.args["group"])
+    if request.args.get("q"):
+        clauses.append("name LIKE ?")
+        args.append("%" + request.args["q"] + "%")
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    return jsonify(db.rows(
+        f"SELECT id, name, logo, grp FROM vod {where} ORDER BY name LIMIT 500", args))
+
+
+@app.post("/api/vod/<int:vid>/play")
+def api_vod_play(vid):
+    """Start muxing a movie to HLS and return its playlist URL once it has data."""
+    m = db.row("SELECT * FROM vod WHERE id=?", (vid,)) or abort(404)
+    s = streamer.vod.sessions.get(vid)
+    if s is None or not s.alive():
+        # Releasing an abandoned live buffer frees the provider connection for the movie;
+        # a kept/scheduled recording still wins and the user gets the limit message.
+        streamer.recorder.stop_other_timeshifts()
+        if streamer.recorder.connection_limit_hit():
+            n = streamer.recorder.max_conn
+            return jsonify({"ok": False, "error": f"Your provider only allows {n} stream(s) at once "
+                            "and it is in use. Stop the recording/live TV or upgrade your "
+                            "plan for more connections."}), 503
+    s = streamer.vod.get(m)
+    if not s.wait_ready():
+        return jsonify({"ok": False, "error": "Stream did not start"}), 503
+    return jsonify({"ok": True,
+                    "stream_url": f"{_base_url()}/vod/{vid}/index.m3u8",
+                    "title": m["name"]})
+
+
+@app.post("/api/vod/<int:vid>/touch")
+def api_vod_touch(vid):
+    """Heartbeat while a movie is playing/paused so the muxer isn't reaped."""
+    return jsonify({"ok": True, "active": streamer.vod.touch(vid) is not None})
+
+
 @app.delete("/api/schedules/by-program")
 def api_schedule_delete_by_program():
     """Cancel the schedule for ?channel_id=&start= (used by the guide grid)."""
@@ -435,6 +485,14 @@ def recording_file(rid, fname):
     if fname.endswith(".m3u8"):
         streamer.recorder.touch_timeshift(rid)
     resp = send_from_directory(rec_dir, fname, conditional=False)
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.get("/vod/<int:vid>/<path:fname>")
+def vod_file(vid, fname):
+    s = streamer.vod.touch(vid) or abort(404)
+    resp = send_from_directory(s.dir, fname, conditional=False)
     resp.headers["Cache-Control"] = "no-cache"
     return resp
 

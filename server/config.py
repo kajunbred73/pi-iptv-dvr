@@ -14,6 +14,8 @@ DEFAULTS = {
     "xtream_pass": "",
     "recordings_dir": os.path.join(DATA_DIR, "recordings"),
     "live_dir": os.path.join(DATA_DIR, "live"),
+    "vod_dir": os.path.join(DATA_DIR, "vod"),
+    "vod_idle_seconds": 900,           # stop a movie stream nobody has touched for this long
     "refresh_hours": 6,
     "pre_pad_min": 1,
     "post_pad_min": 3,
@@ -43,6 +45,7 @@ def load():
                     _cfg.update(json.load(f))
             os.makedirs(_cfg["recordings_dir"], exist_ok=True)
             os.makedirs(_cfg["live_dir"], exist_ok=True)
+            os.makedirs(_cfg["vod_dir"], exist_ok=True)
         return dict(_cfg)
 
 

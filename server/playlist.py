@@ -122,6 +122,29 @@ def _xtream_channels():
         }
 
 
+def _xtream_vod():
+    """Movies via the Xtream player_api (metadata only, a few MB)."""
+    host, user, pw = config.get("xtream_host"), config.get("xtream_user"), config.get("xtream_pass")
+    base = f"{host}/player_api.php?username={quote(user)}&password={quote(pw)}"
+    with open(_download(base + "&action=get_vod_categories", _tmp("vodcats.json")), "rb") as f:
+        cats = {str(c.get("category_id")): c.get("category_name", "") for c in (json.load(f) or [])}
+    with open(_download(base + "&action=get_vod_streams", _tmp("vod.json")), "rb") as f:
+        streams = json.load(f) or []
+    for s in streams:
+        sid = s.get("stream_id")
+        if sid is None:
+            continue
+        ext = s.get("container_extension") or "mp4"
+        yield {
+            "vod_id": sid,
+            "name": s.get("name") or "Unknown",
+            "logo": s.get("stream_icon") or "",
+            "grp": cats.get(str(s.get("category_id")), ""),
+            "ext": ext,
+            "url": f"{host}/movie/{quote(user)}/{quote(pw)}/{sid}.{ext}",
+        }
+
+
 def import_m3u(url=None):
     xtream = all(config.get(k) for k in ("xtream_host", "xtream_user", "xtream_pass"))
     if not xtream and not (url or config.get("m3u_url")):
@@ -147,6 +170,17 @@ def import_m3u(url=None):
     c.executemany("UPDATE groups SET count=? WHERE name=?", [(n, g) for g, n in groups.items()])
     if groups:
         c.execute("DELETE FROM groups WHERE name NOT IN (%s)" % ",".join("?" * len(groups)), list(groups))
+    if xtream:
+        try:
+            c.execute("DELETE FROM vod")
+            vod_n = 0
+            for mv in _xtream_vod():
+                c.execute("INSERT INTO vod(vod_id, name, logo, grp, ext, url) VALUES(?,?,?,?,?,?)",
+                          (mv["vod_id"], mv["name"], mv["logo"], mv["grp"], mv["ext"], mv["url"]))
+                vod_n += 1
+            log.info("imported %d movies", vod_n)
+        except Exception:
+            log.exception("vod import failed")
     c.commit()
     db.set_meta("m3u_last", int(time.time()))
     log.info("imported %d live channels in %d groups", count, len(groups))

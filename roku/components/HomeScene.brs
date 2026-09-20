@@ -25,7 +25,7 @@ sub init()
     m.playTimer.observeField("fire", "onPlayTimeout")
     m.statusTimer = m.top.findNode("statusTimer")
 
-    m.tabs = ["Favorites", "Guide", "Search", "Categories", "Sports Teams", "Recordings", "Scheduled", "Settings"]
+    m.tabs = ["Favorites", "Guide", "Search", "Categories", "Movies", "Sports Teams", "Recordings", "Scheduled", "Settings"]
     m.menu.content = makeList(m.tabs)
     m.menu.observeField("itemFocused", "onMenuFocused")
     m.menu.observeField("itemSelected", "onMenuSelected")
@@ -47,6 +47,7 @@ sub init()
     m.lastQuery = ""
     m.tasks = {}
     m.recordingId = -1
+    m.vodId = -1
     m.playTitle = ""
     m.streamUrl = ""
     m.isLive = false
@@ -159,6 +160,14 @@ function readResumePos(recordingId as Dynamic) as Float
     return v.toFloat()
 end function
 
+' Movie resume positions live under vpos_ so they can't collide with recording ids.
+function readVodPos(vodId as Dynamic) as Float
+    if vodId = invalid then return 0
+    v = m.reg.read("vpos_" + vodId.toStr())
+    if v = invalid or v = "" then return 0
+    return v.toFloat()
+end function
+
 ' Percent-encode for a query string (roUrlTransfer is not allowed on the render thread).
 function urlEnc(s as String) as String
     safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
@@ -258,6 +267,10 @@ sub showTab(idx as Integer)
         m.mode = "categories"
         m.hint.text = "OK: open category guide"
         api("/groups", "groups")
+    else if tabName = "Movies"
+        m.mode = "vodcats"
+        m.hint.text = "OK: open category"
+        api("/vod/groups", "vodgroups")
     else if tabName = "Sports Teams"
         m.mode = "teams"
         m.hint.text = "OK: team options (find / rename / delete)   Back: menu"
@@ -297,7 +310,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 22"], ["server", "refresh", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Version 1.1 build 29"], ["server", "refresh", "version"])
 end sub
 
 sub onContentFocused()
@@ -319,6 +332,10 @@ sub onContentFocused()
         end if
     else if m.mode = "categories"
         m.detail.text = txt(it.count) + " channels"
+    else if m.mode = "vodcats"
+        m.detail.text = txt(it.count) + " movies"
+    else if m.mode = "vodlist"
+        m.detail.text = txt(it.grp)
     else if m.mode = "recordings"
         m.detail.text = txt(it.description)
     else if m.mode = "teams"
@@ -346,6 +363,16 @@ sub onContentSelected()
     else if m.mode = "categories"
         openGrid("group=" + urlEnc(it.name), txt(it.name), txt(it.count) + " channels in this category")
         m.grid.setFocus(true)
+    else if m.mode = "vodcats"
+        m.mode = "vodlist"
+        m.heading.text = "Movies: " + txt(it.name)
+        m.hint.text = "OK: play movie   Back: menu"
+        api("/vod?group=" + urlEnc(txt(it.name)), "vodlist")
+    else if m.mode = "vodlist"
+        m.vodId = it.id
+        m.playTitle = txt(it.name)
+        showLoading("Loading movie...")
+        api("/vod/" + it.id.toStr() + "/play", "vodplay", "POST", "{}")
     else if m.mode = "teams"
         if it.action = "add" then
             promptTeamAdd()
@@ -961,7 +988,7 @@ sub buildMenuBar()
     m.barSel.height = 3
     m.barSel.color = "#3D6BFF"
     m.menuBar.appendChild(m.barSel)
-    widths = [130, 85, 95, 140, 150, 140, 125, 110]
+    widths = [130, 85, 95, 140, 110, 150, 140, 125, 110]
     x = 0
     for i = 0 to m.tabs.count() - 1
         w = 100
@@ -1028,6 +1055,10 @@ sub applyOverlayTab(idx as Integer)
         else if tabName = "Categories"
             m.mode = "categories"
             api("/groups", "groups")
+            m.content.setFocus(true)
+        else if tabName = "Movies"
+            m.mode = "vodcats"
+            api("/vod/groups", "vodgroups")
             m.content.setFocus(true)
         else if tabName = "Sports Teams"
             m.mode = "teams"
@@ -1192,13 +1223,14 @@ end sub
 sub playChannel(ch as Object)
     m.pendingChannel = ch
     m.recordingId = -1
+    m.vodId = -1
     m.playTitle = ch.name
     showLoading("Tuning...")
     api("/timeshift", "timeshift", "POST", FormatJson({ channel_id: ch.id }))
 end sub
 
 sub trickMenu()
-    if m.recordingId < 0 then return
+    if m.recordingId < 0 and m.vodId < 0 then return
     d = CreateObject("roSGNode", "Dialog")
     d.title = m.playTitle
     posn = m.video.position
@@ -1211,7 +1243,16 @@ sub trickMenu()
         info = info + Chr(10) + "OK: select   Back: close"
     end if
     d.message = info
-    if m.video.state = "paused"
+    if m.vodId >= 0
+        ' Movies have no live edge to jump to and nothing to keep.
+        if m.video.state = "paused"
+            buttons = ["Play", "Back 30s", "Forward 30s"]
+            actions = ["play", "back30", "fwd30"]
+        else
+            buttons = ["Pause", "Back 30s", "Forward 30s"]
+            actions = ["pause", "back30", "fwd30"]
+        end if
+    else if m.video.state = "paused"
         buttons = ["Play", "Back 30s", "Forward 30s", "Jump to live", "Keep recording"]
         actions = ["play", "back30", "fwd30", "live", "keep"]
     else
@@ -1262,15 +1303,21 @@ sub focusVideo()
 end sub
 
 sub stopVideo(clearResume = false)
-    if m.recordingId >= 0
+    key = ""
+    if m.vodId >= 0
+        key = "vpos_" + m.vodId.toStr()
+    else if m.recordingId >= 0
+        key = "pos_" + m.recordingId.toStr()
+    end if
+    if key <> ""
         if clearResume
-            m.reg.delete("pos_" + m.recordingId.toStr())
+            m.reg.delete(key)
             m.reg.flush()
         else
             lastPos = m.video.position
             totalDur = m.video.duration
             if lastPos > 5 and (totalDur <= 0 or lastPos < totalDur - 15)
-                m.reg.write("pos_" + m.recordingId.toStr(), lastPos.toStr())
+                m.reg.write(key, lastPos.toStr())
                 m.reg.flush()
             end if
         end if
@@ -1301,6 +1348,7 @@ sub stopVideo(clearResume = false)
         m.grid.scale = [1, 1]
     end if
     m.recordingId = -1
+    m.vodId = -1
     m.isLive = false
     m.retrying = false
     m.retryTimer.control = "stop"
@@ -1366,9 +1414,11 @@ end sub
 sub loadStatus()
     if m.server = "" then return
     api("/status", "status")
-    ' Heartbeat so the Pi keeps the live buffer running while we watch (or sit paused).
+    ' Heartbeat so the Pi keeps the live buffer (or movie muxer) running while we watch.
     if m.video.visible and m.isLive and m.recordingId >= 0
         api("/timeshift/" + m.recordingId.toStr() + "/touch", "touch", "POST", "")
+    else if m.video.visible and m.vodId >= 0
+        api("/vod/" + m.vodId.toStr() + "/touch", "touch", "POST", "")
     end if
 end sub
 
@@ -1384,7 +1434,7 @@ sub onApiError(ev as Object)
         m.status.text = "Cannot reach " + m.server
     else
         toast("Error: " + t.error)
-        if t.tag = "channels" or t.tag = "groups" or t.tag = "recordings" or t.tag = "schedules"
+        if t.tag = "channels" or t.tag = "groups" or t.tag = "recordings" or t.tag = "schedules" or t.tag = "vodgroups" or t.tag = "vodlist"
             setRows([], [], "Cannot reach the Pi at " + m.server + ". Check Settings.")
         end if
     end if
@@ -1513,6 +1563,40 @@ sub onApiResponse(ev as Object)
             end if
         end for
         setRows(labels, items, "No groups enabled. On the Pi web page go to Settings > Channel groups and tick the groups you watch.")
+    else if tag = "vodgroups"
+        if m.mode <> "vodcats" then return
+        labels = []
+        items = []
+        for each g in r.items
+            name = txt(g.name)
+            if name = "" then name = "(no category)"
+            labels.push(name + "   (" + txt(g.count) + ")")
+            items.push({ name: g.name, count: g.count })
+        end for
+        setRows(labels, items, "No movies found. Try Refresh playlist and guide on server from Settings.")
+    else if tag = "vodlist"
+        if m.mode <> "vodlist" then return
+        labels = []
+        items = []
+        for each mv in r.items
+            saved = readVodPos(mv.id)
+            tagTxt = ""
+            if saved > 5 then tagTxt = "   (resume " + fmtDuration(saved) + ")"
+            labels.push(txt(mv.name) + tagTxt)
+            items.push(mv)
+        end for
+        setRows(labels, items, "No movies in this category.")
+    else if tag = "vodplay"
+        if r.ok = true or r.ok = 1
+            saved = readVodPos(m.vodId)
+            if saved > 5
+                showResumeDialog(r.stream_url, txt(r.title), false, saved, -1)
+            else
+                play(r.stream_url, txt(r.title), false)
+            end if
+        else
+            playError("Could not start the movie: " + txt(r.error))
+        end if
     else if tag = "recordings"
         if m.mode <> "recordings" then return
         labels = []

@@ -62,6 +62,17 @@ CREATE TABLE IF NOT EXISTS recordings (
     size_bytes INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS vod (
+    id INTEGER PRIMARY KEY,
+    vod_id INTEGER,
+    name TEXT NOT NULL,
+    logo TEXT,
+    grp TEXT,
+    ext TEXT,
+    url TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vod_grp ON vod(grp);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
