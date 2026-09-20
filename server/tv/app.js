@@ -398,19 +398,31 @@ function startReadyPoll() {
 }
 
 function onReady(r) {
+  if (r.ready && r.duration < 55) {
+    // Don't join right at the live edge: the buffer only has a few seconds at
+    // tune time, so playing now would ride the edge forever and every provider
+    // hiccup would freeze the picture. Wait for ~55s of runway, join ~45s
+    // behind, and stalls get absorbed by the buffer instead.
+    S.readyAttempts = (S.readyAttempts || 0) + 1;
+    setLoadingProgress(`Building buffer... ${Math.floor(r.duration)}s / 55s`);
+    if (S.readyAttempts > 150) {
+      clearInterval(S.readyTimer);
+      showMsg("Can't play", 'The live buffer is growing too slowly to play reliably.');
+    }
+    return;
+  }
   if (r.ready) {
     clearInterval(S.readyTimer);
-    const startPos = r.duration > 60 ? r.duration - 45 : r.duration > 20 ? r.duration - 10 : 0;
-    playStream(S.streamUrl, S.playTitle, true, startPos);
+    playStream(S.streamUrl, S.playTitle, true, Math.max(0, r.duration - 45));
   } else if (r.status !== 'recording') {
     clearInterval(S.readyTimer);
     showMsg("Can't play", "The Pi could not open this channel's stream. ffmpeg said:\n" + txt(r.error));
   } else {
     S.readyAttempts = (S.readyAttempts || 0) + 1;
     setLoadingProgress(`Buffering live TV... ${r.segments}/3`);
-    if (S.readyAttempts > 90) {
+    if (S.readyAttempts > 150) {
       clearInterval(S.readyTimer);
-      showMsg("Can't play", `The Pi is still not producing video after 90 s (${r.segments} segments).`);
+      showMsg("Can't play", `The Pi is still not producing video after 150 s (${r.segments} segments).`);
     }
   }
 }
