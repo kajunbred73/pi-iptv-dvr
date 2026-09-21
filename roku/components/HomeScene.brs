@@ -73,6 +73,7 @@ sub init()
     m.seenPlaying = false
     m.stallPos = -1
     m.stallTicks = 0
+    m.rejoinPos = -1
     m.autoRetunes = 0
     m.playChannel = invalid
     m.finishPos = 0
@@ -918,6 +919,7 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.seenPlaying = false
     m.stallPos = -1
     m.stallTicks = 0
+    m.rejoinPos = -1
     m.finishPos = 0
     m.readyTimer.control = "stop"
     m.retryTimer.control = "stop"
@@ -952,9 +954,11 @@ end sub
 ' Reload the live playlist and rejoin. A fresh ContentNode is required:
 ' "play" on a Video that has finished replays the manifest it already has instead of
 ' fetching the (now longer) one from the Pi.
-' resumePos >= 0: continue from that position (stall recovery - don't lose what aired
-' during the gap). resumePos < 0: jump to the live edge (manual "Jump to live").
-sub rejoinLive(resumePos = -1)
+' m.rejoinPos >= 0: continue from that position (stall recovery - don't lose what
+' aired during the gap). < 0: jump to the live edge (manual "Jump to live").
+sub rejoinLive()
+    resumePos = m.rejoinPos
+    m.rejoinPos = -1
     ' Grab duration before stopping - "stop" can reset it.
     dur = m.video.duration
     if m.video.state = "playing" or m.video.state = "paused" or m.video.state = "buffering"
@@ -1699,11 +1703,8 @@ sub onApiResponse(ev as Object)
             if r.duration <> invalid and r.duration > m.finishPos + 6
                 ' Resume where playback froze so the viewer doesn't lose what aired
                 ' during the gap; near position 0 that's meaningless, so join live.
-                if m.finishPos > 4
-                    rejoinLive(m.finishPos + 1)
-                else
-                    rejoinLive()
-                end if
+                if m.finishPos > 4 then m.rejoinPos = m.finishPos + 1
+                rejoinLive()
             else
                 m.retrying = true
                 m.retryTimer.control = "start"
