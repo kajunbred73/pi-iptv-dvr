@@ -427,7 +427,9 @@ def api_vod_info(vid):
             info = json.loads(cached["json"] or "")
         except (ValueError, TypeError):
             info = {}
-        if info.get("ok") or _now() - (cached["fetched"] or 0) < 3600:
+        # "mpaa" was added later - one refetch refreshes pre-existing cache entries.
+        fresh_fail = not info.get("ok") and _now() - (cached["fetched"] or 0) < 3600
+        if (info.get("ok") and "mpaa" in info) or fresh_fail:
             info["id"] = vid
             return jsonify(info)
     info = {"ok": False, "error": "No details available for this movie."}
@@ -441,6 +443,7 @@ def api_vod_info(vid):
             info = {"ok": True,
                     "plot": meta.get("plot") or meta.get("description") or "",
                     "rating": meta.get("rating_5based") or meta.get("rating") or "",
+                    "mpaa": meta.get("mpaa_rating") or "",
                     "genre": meta.get("genre") or "",
                     "cast": meta.get("cast") or "",
                     "director": meta.get("director") or "",

@@ -1253,7 +1253,7 @@ sub hideGuideOverlay()
     m.menuBar.visible = false
     m.content.translation = [470, 180]
     m.content.itemSize = [1390, 58]
-    m.content.numRows = 13
+    m.content.numRows = 11
     m.content.visible = (m.mode <> "grid")
     m.detail.visible = true
     m.detailBg.visible = true
@@ -1566,7 +1566,7 @@ sub stopVideo(clearResume = false)
         m.menuBar.visible = false
         m.content.translation = [470, 180]
         m.content.itemSize = [1390, 58]
-        m.content.numRows = 13
+        m.content.numRows = 11
         m.content.visible = (m.mode <> "grid")
         m.detail.visible = true
         m.detailBg.visible = true
@@ -1883,7 +1883,9 @@ sub onApiResponse(ev as Object)
         if it.id = invalid or it.id <> r.id then return
         if r.ok = true or r.ok = 1
             parts = []
-            if txt(r.rating) <> "" then parts.push("Rating " + txt(r.rating) + " / 5")
+            mpaa = txt(r.mpaa)
+            if mpaa <> "" and mpaa <> "N/A" and mpaa <> "Not Rated" then parts.push("Rated " + mpaa)
+            if txt(r.rating) <> "" then parts.push("Score " + txt(r.rating) + " / 5")
             if txt(r.released) <> "" then parts.push(Left(txt(r.released), 4))
             if txt(r.genre) <> "" then parts.push(txt(r.genre))
             if txt(r.duration) <> "" then parts.push(txt(r.duration))

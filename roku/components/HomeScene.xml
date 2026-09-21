@@ -11,15 +11,15 @@
 
     <Label id="heading" translation="[470,120]" width="1390" font="font:MediumBoldSystemFont" color="#FFFFFF" />
     <Rectangle id="guideCover" width="960" height="1080" color="#0D1117" visible="false" />
-    <LabelList id="content" translation="[470,180]" itemSize="[1390,58]" numRows="13" color="#D0D8E0" focusedColor="#FFFFFF" />
+    <LabelList id="content" translation="[470,180]" itemSize="[1390,58]" numRows="11" color="#D0D8E0" focusedColor="#FFFFFF" />
     <GuideGrid id="grid" translation="[470,170]" visible="false" />
     <Rectangle id="guideInfoBg" translation="[0,664]" width="960" height="264" color="#141B24" visible="false" />
     <Label id="guideInfo" translation="[40,676]" width="896" height="240" wrap="true" maxLines="8" font="font:SmallSystemFont" color="#E8EEF4" visible="false" />
     <Group id="menuBar" translation="[40,56]" visible="false" />
     <Label id="empty" translation="[470,200]" width="1390" wrap="true" font="font:MediumSystemFont" color="#66707A" visible="false" />
 
-    <Rectangle id="detailBg" translation="[470,940]" width="1390" height="120" color="#161C22" />
-    <Label id="detail" translation="[490,950]" width="1350" height="104" wrap="true" maxLines="4" font="font:SmallestSystemFont" color="#AAB4BE" />
+    <Rectangle id="detailBg" translation="[470,830]" width="1390" height="230" color="#161C22" />
+    <Label id="detail" translation="[490,842]" width="1350" height="212" wrap="true" maxLines="8" font="font:SmallestSystemFont" color="#AAB4BE" />
     <Label id="hint" translation="[60,960]" width="340" height="80" wrap="true" font="font:SmallestSystemFont" color="#66707A" />
 
     <Video id="video" width="1920" height="1080" visible="false" enableUI="true" />
