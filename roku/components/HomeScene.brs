@@ -992,18 +992,18 @@ end sub
 sub onStallCheck()
     if not m.video.visible or not m.isLive or not m.seenPlaying then return
     if m.video.state <> "playing" and m.video.state <> "buffering" then return
-    pos = m.video.position
-    if pos = invalid then return
-    if m.stallPos >= 0 and pos <= m.stallPos + 0.5
+    curPos = m.video.position
+    if curPos = invalid then return
+    if m.stallPos >= 0 and curPos <= m.stallPos + 0.5
         m.stallTicks = m.stallTicks + 1
     else
         m.stallTicks = 0
-        m.stallPos = pos
+        m.stallPos = curPos
     end if
     if m.stallTicks >= 3 and not m.retrying
         m.stallTicks = 0
         m.stallPos = -1
-        m.finishPos = pos
+        m.finishPos = curPos
         m.retryCount = m.retryCount + 1
         if m.retryCount < 30
             m.retrying = true
