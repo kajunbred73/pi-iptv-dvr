@@ -80,6 +80,7 @@ sub init()
     m.lastErr = ""
     m.lastSegs = 0
     m.readyAttempts = 0
+    m.followChannelId = -1
     m.resumeRecordingId = -1
     m.resumeUrl = ""
     m.resumeTitle = ""
@@ -261,7 +262,7 @@ sub showTab(idx as Integer)
     tabName = m.tabs[idx]
     m.heading.text = tabName
     if tabName = "Favorites"
-        openGrid("favorites=1", "Favorites", "Only channels you starred. Press * on any channel to add/remove.")
+        openGrid("favorites=1", "Favorites", "Only channels you starred. Press * to arrange or remove.")
     else if tabName = "Guide"
         openGrid("", "Guide", "All enabled channels")
     else if tabName = "Search"
@@ -324,7 +325,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Clear all movie resume marks", "Version 1.1 build 29"], ["server", "refresh", "vodclear", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Clear all movie resume marks", "Version 1.1 build 31"], ["server", "refresh", "vodclear", "version"])
 end sub
 
 sub onContentFocused()
@@ -467,7 +468,45 @@ end sub
 
 sub onGridFav()
     ch = m.grid.favToggle
-    if ch <> invalid then toggleFavorite(ch)
+    if ch = invalid then return
+    if m.gridFilter = "favorites=1"
+        ' In the Favorites grid * opens the arrange menu instead of unstarring.
+        favMoveMenu(ch)
+    else
+        toggleFavorite(ch)
+    end if
+end sub
+
+' Arrange options for a favorite channel (* in the Favorites grid).
+sub favMoveMenu(ch as Object)
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = txt(ch.name)
+    d.message = "Arrange this channel in your Favorites list"
+    d.buttons = ["Move up", "Move down", "Move to top", "Move to bottom", "Remove from Favorites", "Close"]
+    d.addField("actions", "array", false)
+    d.addField("channelId", "integer", false)
+    d.actions = ["up", "down", "top", "bottom", "unfav", "close"]
+    d.channelId = ch.id
+    d.observeField("buttonSelected", "onFavMove")
+    m.top.dialog = d
+    d.setFocus(true)
+end sub
+
+sub onFavMove(ev as Object)
+    d = ev.getRoSGNode()
+    d.close = true
+    m.top.dialog = invalid
+    idx = ev.getData()
+    if idx < 0 or idx >= d.actions.count() then return
+    action = d.actions[idx]
+    if action = "close" then return
+    if action = "unfav"
+        api("/channels/" + d.channelId.toStr() + "/favorite", "favmove", "POST", "{""favorite"": false}")
+    else
+        ' Follow the moved channel to its new row after the grid reloads.
+        m.followChannelId = d.channelId
+        api("/favorites/move", "favmove", "POST", FormatJson({ channel_id: d.channelId, dir: action }))
+    end if
 end sub
 
 sub onGridPage()
@@ -1731,8 +1770,22 @@ sub onApiResponse(ev as Object)
         else
             toast("Could not save recording")
         end if
+    else if tag = "favmove"
+        if m.mode = "grid" or m.guideOverlay then loadGrid()
     else if tag = "guide"
         if m.mode <> "grid" and not m.guideOverlay then return
+        ' After a favorites move, keep the highlight on the channel that moved.
+        ' focusRow must be set before grid.data: it has no onChange, and onData
+        ' clamps it to the new channel list and renders once.
+        if m.followChannelId >= 0 and r.channels <> invalid
+            for i = 0 to r.channels.count() - 1
+                if r.channels[i].id = m.followChannelId
+                    m.grid.focusRow = i
+                    exit for
+                end if
+            end for
+            m.followChannelId = -1
+        end if
         m.grid.data = r
         if m.guideOverlay then m.grid.setFocus(true)
         n = 0

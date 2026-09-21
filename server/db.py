@@ -94,6 +94,14 @@ def conn():
 
 def init():
     conn().executescript(SCHEMA)
+    # Column additions for DBs created before the column existed.
+    cols = [r["name"] for r in conn().execute("PRAGMA table_info(channels)")]
+    if "fav_order" not in cols:
+        conn().execute("ALTER TABLE channels ADD COLUMN fav_order INTEGER DEFAULT 0")
+        # Existing favorites keep their current channel-number order.
+        for i, r in enumerate(conn().execute(
+                "SELECT id FROM channels WHERE favorite=1 ORDER BY num, name")):
+            conn().execute("UPDATE channels SET fav_order=? WHERE id=?", (i + 1, r["id"]))
     conn().commit()
 
 

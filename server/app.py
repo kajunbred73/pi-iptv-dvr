@@ -118,7 +118,7 @@ def api_status():
 def api_channels():
     now = _now()
     where, args = _channel_filter()
-    q = f"SELECT * FROM channels {where} ORDER BY favorite DESC, num, name"
+    q = f"SELECT * FROM channels {where} ORDER BY favorite DESC, fav_order, num, name"
     with_epg = request.args.get("epg", "1") != "0"
     cur, nxt = _now_next_all(now) if with_epg else ({}, {})
     out = []
@@ -142,7 +142,7 @@ def api_search():
     where, args = _channel_filter()
     like = "%" + q + "%"
 
-    chans = db.rows(f"SELECT * FROM channels {where} AND name LIKE ? ORDER BY favorite DESC, num, name LIMIT 40",
+    chans = db.rows(f"SELECT * FROM channels {where} AND name LIKE ? ORDER BY favorite DESC, fav_order, num, name LIMIT 40",
                     args + [like])
     cur, nxt = _now_next_all(now)
     ch_out = []
@@ -188,8 +188,43 @@ def api_groups_save():
 @app.post("/api/channels/<int:cid>/favorite")
 def api_favorite(cid):
     fav = 1 if (request.json or {}).get("favorite", True) else 0
-    db.execute("UPDATE channels SET favorite=? WHERE id=?", (fav, cid))
+    if fav:
+        # New favorites land at the bottom of the custom order.
+        db.execute("UPDATE channels SET favorite=1, "
+                   "fav_order=COALESCE((SELECT MAX(fav_order) FROM channels WHERE favorite=1),0)+1 "
+                   "WHERE id=?", (cid,))
+    else:
+        db.execute("UPDATE channels SET favorite=0, fav_order=0 WHERE id=?", (cid,))
     return jsonify({"ok": True})
+
+
+@app.post("/api/favorites/move")
+def api_fav_move():
+    """Rearrange favorites: {"channel_id": N, "dir": "up"|"down"|"top"|"bottom"}.
+    Renumbers fav_order 1..n so ordering stays dense."""
+    body = request.get_json(force=True, silent=True) or {}
+    cid = int(body.get("channel_id") or 0)
+    action = body.get("dir")
+    ids = [r["id"] for r in db.rows(
+        "SELECT id FROM channels WHERE favorite=1 ORDER BY fav_order, num, name")]
+    if cid not in ids:
+        abort(404)
+    old = ids.index(cid)
+    ids.pop(old)
+    if action == "up":
+        new = max(0, old - 1)
+    elif action == "down":
+        new = min(len(ids), old + 1)
+    elif action == "top":
+        new = 0
+    elif action == "bottom":
+        new = len(ids)
+    else:
+        abort(400, "dir must be up|down|top|bottom")
+    ids.insert(new, cid)
+    for k, fid in enumerate(ids):
+        db.execute("UPDATE channels SET fav_order=? WHERE id=?", (k + 1, fid))
+    return jsonify({"ok": True, "position": new})
 
 
 @app.get("/api/epg/<int:cid>")
@@ -215,7 +250,7 @@ def api_guide():
     start = int(request.args.get("from", now - now % 1800))
     end = start + hours * 3600
     where, args = _channel_filter()
-    chans = db.rows(f"SELECT * FROM channels {where} ORDER BY favorite DESC, num, name", args)
+    chans = db.rows(f"SELECT * FROM channels {where} ORDER BY favorite DESC, fav_order, num, name", args)
     ids = {c["tvg_id"] for c in chans if c["tvg_id"]}
     progs = {}
     if ids:
