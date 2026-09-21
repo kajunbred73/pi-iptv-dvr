@@ -23,6 +23,8 @@ sub init()
     m.retryTimer.observeField("fire", "onRetry")
     m.playTimer = m.top.findNode("playTimer")
     m.playTimer.observeField("fire", "onPlayTimeout")
+    m.stallTimer = m.top.findNode("stallTimer")
+    m.stallTimer.observeField("fire", "onStallCheck")
     m.statusTimer = m.top.findNode("statusTimer")
 
     m.tabs = ["Favorites", "Guide", "Recent", "Search", "Categories", "Movies", "Sports Teams", "Recordings", "Scheduled", "Settings"]
@@ -68,6 +70,9 @@ sub init()
     m.renameIdx = -1
     m.retryCount = 0
     m.retrying = false
+    m.seenPlaying = false
+    m.stallPos = -1
+    m.stallTicks = 0
     m.autoRetunes = 0
     m.playChannel = invalid
     m.finishPos = 0
@@ -910,9 +915,13 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.startPos = startPos
     m.retryCount = 0
     m.retrying = false
+    m.seenPlaying = false
+    m.stallPos = -1
+    m.stallTicks = 0
     m.finishPos = 0
     m.readyTimer.control = "stop"
     m.retryTimer.control = "stop"
+    m.stallTimer.control = "start"
     if m.top.dialog <> invalid and m.top.dialog.loading = true
         ' keep the existing loading dialog
     else
@@ -940,10 +949,12 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.playTimer.control = "start"
 end sub
 
-' Reload the live playlist and rejoin at the live edge. A fresh ContentNode is required:
+' Reload the live playlist and rejoin. A fresh ContentNode is required:
 ' "play" on a Video that has finished replays the manifest it already has instead of
 ' fetching the (now longer) one from the Pi.
-sub rejoinLive()
+' resumePos >= 0: continue from that position (stall recovery - don't lose what aired
+' during the gap). resumePos < 0: jump to the live edge (manual "Jump to live").
+sub rejoinLive(resumePos = -1)
     ' Grab duration before stopping - "stop" can reset it.
     dur = m.video.duration
     if m.video.state = "playing" or m.video.state = "paused" or m.video.state = "buffering"
@@ -954,18 +965,49 @@ sub rejoinLive()
     c.title = m.playTitle
     c.streamFormat = "hls"
     c.live = false
-    ' Jump to live = near the end of the buffer we already know about (VOD mode: duration is
-    ' the playlist length at last fetch). Falling back to finishPos covers the case where
-    ' playback ran out before the user asked to rejoin.
-    if dur <> invalid and dur > 15
+    if resumePos >= 0
+        c.playStart = resumePos
+    else if dur <> invalid and dur > 15
         c.playStart = dur - 10
     else if m.finishPos > 4
         c.playStart = m.finishPos - 3
     end if
     m.video.content = c
     m.video.visible = true
+    m.seenPlaying = false
+    m.stallPos = -1
+    m.stallTicks = 0
     focusVideo()
     m.video.control = "play"
+end sub
+
+' Position watchdog: a starving buffer can sit in "buffering" (or even "playing")
+' forever without ever firing "error"/"finished", so no recovery path triggers.
+' If the position hasn't advanced ~15s after playback had started, treat it like a
+' "finished" that never fired and go through the normal rejoin flow.
+sub onStallCheck()
+    if not m.video.visible or not m.isLive or not m.seenPlaying then return
+    if m.video.state <> "playing" and m.video.state <> "buffering" then return
+    pos = m.video.position
+    if pos = invalid then return
+    if m.stallPos >= 0 and pos <= m.stallPos + 0.5
+        m.stallTicks = m.stallTicks + 1
+    else
+        m.stallTicks = 0
+        m.stallPos = pos
+    end if
+    if m.stallTicks >= 3 and not m.retrying
+        m.stallTicks = 0
+        m.stallPos = -1
+        m.finishPos = pos
+        m.retryCount = m.retryCount + 1
+        if m.retryCount < 30
+            m.retrying = true
+            m.retryTimer.control = "start"
+        else
+            playError("The live stream kept freezing (" + txt(m.lastSegs) + " segments buffered). " + m.lastErr)
+        end if
+    end if
 end sub
 
 ' Something went wrong starting/playing video: stop and tell the user why (a toast is hidden
@@ -1451,6 +1493,10 @@ sub stopVideo(clearResume = false)
     hideLoading()
     m.readyTimer.control = "stop"
     m.playTimer.control = "stop"
+    m.stallTimer.control = "stop"
+    m.seenPlaying = false
+    m.stallPos = -1
+    m.stallTicks = 0
     m.video.control = "stop"
     m.video.visible = false
     if m.guideOverlay
@@ -1491,6 +1537,9 @@ sub onVideoState()
     if st = "playing"
         hideLoading()
         m.playTimer.control = "stop"
+        m.seenPlaying = true
+        m.stallPos = -1
+        m.stallTicks = 0
         focusVideo()
         if m.startPos > 0
             m.video.seek = m.startPos
@@ -1500,6 +1549,7 @@ sub onVideoState()
         m.retrying = false
         m.autoRetunes = 0
     else if st = "error"
+        if m.video.position <> invalid and m.video.position > 4 then m.finishPos = m.video.position
         if m.recordingId >= 0 and m.isLive and m.retryCount < 5 and not m.retrying
             m.retrying = true
             m.retryCount = m.retryCount + 1
@@ -1647,7 +1697,13 @@ sub onApiResponse(ev as Object)
             ' Only reload once the buffer actually grew past where we stopped (~2+ new
             ' segments); reloading immediately just re-finished and burned the retries.
             if r.duration <> invalid and r.duration > m.finishPos + 6
-                rejoinLive()
+                ' Resume where playback froze so the viewer doesn't lose what aired
+                ' during the gap; near position 0 that's meaningless, so join live.
+                if m.finishPos > 4
+                    rejoinLive(m.finishPos + 1)
+                else
+                    rejoinLive()
+                end if
             else
                 m.retrying = true
                 m.retryTimer.control = "start"

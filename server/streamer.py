@@ -42,7 +42,7 @@ def _input_args(url, start_at=0):
                  # A stalled connection that stays open produces no error and no EOF, so none
                  # of the reconnect flags fire and segments just stop appearing. rw_timeout
                  # turns a >10s silent read/write into an error the reconnect flags can act on.
-                 "-rw_timeout", "15000000",
+                 "-rw_timeout", "10000000",
                  "-user_agent", config.get("user_agent")]
     else:
         args += ["-re"]  # local files: read in real time
@@ -543,6 +543,29 @@ class Recorder:
         for r in db.rows("SELECT * FROM recordings WHERE status IN ('done','failed') "
                          "AND title LIKE '[timeshift] %' AND stop < ?", (cutoff,)):
             delete_recording(r["id"])
+        # Disk guard: the SD card filling up is a silent killer - ffmpeg starts failing
+        # with cryptic errors. When free space drops low, drop the oldest finished
+        # live buffers first. Kept/scheduled recordings are never auto-deleted.
+        try:
+            free = shutil.disk_usage(config.get("recordings_dir")).free
+        except OSError:
+            return
+        low = 800 * 1024 * 1024
+        if free < low:
+            log.warning("recordings disk low (%d MB free) - deleting oldest live buffers",
+                        free // (1024 * 1024))
+            for r in db.rows("SELECT * FROM recordings WHERE status IN ('done','failed') "
+                             "AND title LIKE '[timeshift] %' ORDER BY stop"):
+                delete_recording(r["id"])
+                try:
+                    free = shutil.disk_usage(config.get("recordings_dir")).free
+                except OSError:
+                    break
+                if free >= low:
+                    break
+            if free < low:
+                log.warning("still low on disk after purging live buffers (%d MB free)",
+                            free // (1024 * 1024))
 
     def last_error(self, rid):
         """Last non-empty line of the recording's ffmpeg.log (why it failed), or ''."""

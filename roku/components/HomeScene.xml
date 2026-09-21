@@ -27,6 +27,7 @@
     <Timer id="readyTimer" repeat="true" duration="1" />
     <Timer id="retryTimer" repeat="false" duration="3" />
     <Timer id="playTimer" repeat="false" duration="30" />
+    <Timer id="stallTimer" repeat="true" duration="5" />
     <Timer id="statusTimer" repeat="true" duration="30" />
   </children>
 </component>
