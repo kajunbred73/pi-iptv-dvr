@@ -25,6 +25,8 @@ sub init()
     m.playTimer.observeField("fire", "onPlayTimeout")
     m.stallTimer = m.top.findNode("stallTimer")
     m.stallTimer.observeField("fire", "onStallCheck")
+    m.vodInfoTimer = m.top.findNode("vodInfoTimer")
+    m.vodInfoTimer.observeField("fire", "onVodInfoTimer")
     m.statusTimer = m.top.findNode("statusTimer")
 
     m.tabs = ["Favorites", "Guide", "Recent", "Search", "Categories", "Movies", "Sports Teams", "Recordings", "Scheduled", "Settings"]
@@ -81,6 +83,7 @@ sub init()
     m.lastSegs = 0
     m.readyAttempts = 0
     m.followChannelId = -1
+    m.pendingVodInfo = -1
     m.resumeRecordingId = -1
     m.resumeUrl = ""
     m.resumeTitle = ""
@@ -325,7 +328,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Clear all movie resume marks", "Version 1.1 build 31"], ["server", "refresh", "vodclear", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Clear all movie resume marks", "Version 1.1 build 32"], ["server", "refresh", "vodclear", "version"])
 end sub
 
 sub onContentFocused()
@@ -351,6 +354,13 @@ sub onContentFocused()
         m.detail.text = txt(it.count) + " movies"
     else if m.mode = "vodlist"
         m.detail.text = txt(it.grp)
+        ' Debounced: fetch plot/rating only after the highlight rests ~0.6 s,
+        ' so fast scrolling doesn't fire a provider lookup per row.
+        if it.id <> invalid
+            m.pendingVodInfo = it.id
+            m.vodInfoTimer.control = "stop"
+            m.vodInfoTimer.control = "start"
+        end if
     else if m.mode = "recent"
         if it.kind = "movie"
             m.detail.text = "Movie"
@@ -368,6 +378,11 @@ sub onContentFocused()
     end if
     ' Overlay: list rows show their details in the bottom panel instead of the hidden detail bar.
     if m.guideOverlay then m.guideInfo.text = m.detail.text
+end sub
+
+sub onVodInfoTimer()
+    if m.mode <> "vodlist" or m.pendingVodInfo < 0 then return
+    api("/vod/" + m.pendingVodInfo.toStr() + "/info", "vodinfo")
 end sub
 
 sub onContentSelected()
@@ -1650,7 +1665,7 @@ end sub
 
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
-    if t.tag = "touch" then return
+    if t.tag = "touch" or t.tag = "vodinfo" then return
     if t.tag = "timeshift" or t.tag = "readycheck" or t.tag = "rejoin" or t.tag = "vodplay"
         m.readyTimer.control = "stop"
         playError("The Pi did not answer " + t.url + Chr(10) + t.error + Chr(10) + "If this says HTTP 404, the Pi is running old server code: cd pi-iptv-dvr && git pull && sudo systemctl restart pi-iptv-dvr")
@@ -1858,6 +1873,31 @@ sub onApiResponse(ev as Object)
             items.push(mv)
         end for
         setRows(labels, items, "No movies in this category.")
+    else if tag = "vodinfo"
+        ' Details for the highlighted movie. Stale responses (user scrolled on)
+        ' are dropped by comparing the returned id to the focused row.
+        if m.mode <> "vodlist" then return
+        i = m.content.itemFocused
+        if i < 0 or i >= m.items.count() then return
+        it = m.items[i]
+        if it.id = invalid or it.id <> r.id then return
+        if r.ok = true or r.ok = 1
+            parts = []
+            if txt(r.rating) <> "" then parts.push("Rating " + txt(r.rating) + " / 5")
+            if txt(r.released) <> "" then parts.push(Left(txt(r.released), 4))
+            if txt(r.genre) <> "" then parts.push(txt(r.genre))
+            if txt(r.duration) <> "" then parts.push(txt(r.duration))
+            info = ""
+            for each p in parts
+                if info <> "" then info = info + "   |   "
+                info = info + p
+            end for
+            if txt(r.plot) <> "" then info = info + Chr(10) + txt(r.plot)
+            if txt(r.cast) <> "" then info = info + Chr(10) + "Cast: " + txt(r.cast)
+            if info = "" then info = txt(it.grp)
+            m.detail.text = info
+            if m.guideOverlay then m.guideInfo.text = info
+        end if
     else if tag = "vodplay"
         if r.ok = true or r.ok = 1
             ' ffmpeg is muxing on the Pi; poll /ready like the live-buffer flow so a slow

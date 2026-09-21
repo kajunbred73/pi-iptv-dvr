@@ -18,8 +18,8 @@
     <Group id="menuBar" translation="[40,56]" visible="false" />
     <Label id="empty" translation="[470,200]" width="1390" wrap="true" font="font:MediumSystemFont" color="#66707A" visible="false" />
 
-    <Rectangle id="detailBg" translation="[470,950]" width="1390" height="90" color="#161C22" />
-    <Label id="detail" translation="[490,960]" width="1350" height="70" wrap="true" maxLines="2" font="font:SmallestSystemFont" color="#AAB4BE" />
+    <Rectangle id="detailBg" translation="[470,940]" width="1390" height="120" color="#161C22" />
+    <Label id="detail" translation="[490,950]" width="1350" height="104" wrap="true" maxLines="4" font="font:SmallestSystemFont" color="#AAB4BE" />
     <Label id="hint" translation="[60,960]" width="340" height="80" wrap="true" font="font:SmallestSystemFont" color="#66707A" />
 
     <Video id="video" width="1920" height="1080" visible="false" enableUI="true" />
@@ -28,6 +28,7 @@
     <Timer id="retryTimer" repeat="false" duration="3" />
     <Timer id="playTimer" repeat="false" duration="30" />
     <Timer id="stallTimer" repeat="true" duration="5" />
+    <Timer id="vodInfoTimer" repeat="false" duration="0.6" />
     <Timer id="statusTimer" repeat="true" duration="30" />
   </children>
 </component>

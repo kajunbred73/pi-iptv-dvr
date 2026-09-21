@@ -1,8 +1,10 @@
 import argparse
+import json
 import logging
 import os
 import threading
 import time
+import urllib.request
 
 from urllib.parse import quote
 
@@ -409,6 +411,47 @@ def api_vod():
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     return jsonify(db.rows(
         f"SELECT id, name, logo, grp FROM vod {where} ORDER BY name LIMIT 500", args))
+
+
+@app.get("/api/vod/<int:vid>/info")
+def api_vod_info(vid):
+    """On-demand movie details (plot, rating, cast) from the Xtream provider.
+
+    Cached in vod_info keyed by the provider's vod_id so it survives catalog
+    reimports; failures are cached for an hour so scrolling a list doesn't
+    hammer the provider."""
+    m = db.row("SELECT * FROM vod WHERE id=?", (vid,)) or abort(404)
+    cached = db.row("SELECT json, fetched FROM vod_info WHERE vod_id=?", (m["vod_id"],))
+    if cached:
+        try:
+            info = json.loads(cached["json"] or "")
+        except (ValueError, TypeError):
+            info = {}
+        if info.get("ok") or _now() - (cached["fetched"] or 0) < 3600:
+            info["id"] = vid
+            return jsonify(info)
+    info = {"ok": False, "error": "No details available for this movie."}
+    host, user, pw = (config.get(k) for k in ("xtream_host", "xtream_user", "xtream_pass"))
+    if host and user and pw and m["vod_id"]:
+        try:
+            url = (f"{host}/player_api.php?username={user}&password={pw}"
+                   f"&action=get_vod_info&vod_id={m['vod_id']}")
+            with urllib.request.urlopen(url, timeout=8) as r:
+                meta = (json.load(r) or {}).get("info") or {}
+            info = {"ok": True,
+                    "plot": meta.get("plot") or meta.get("description") or "",
+                    "rating": meta.get("rating_5based") or meta.get("rating") or "",
+                    "genre": meta.get("genre") or "",
+                    "cast": meta.get("cast") or "",
+                    "director": meta.get("director") or "",
+                    "released": meta.get("releasedate") or "",
+                    "duration": meta.get("duration") or ""}
+        except Exception as e:
+            info = {"ok": False, "error": f"Details lookup failed: {e}"}
+    db.execute("INSERT OR REPLACE INTO vod_info(vod_id, json, fetched) VALUES(?,?,?)",
+               (m["vod_id"], json.dumps(info), _now()))
+    info["id"] = vid
+    return jsonify(info)
 
 
 @app.post("/api/vod/<int:vid>/play")

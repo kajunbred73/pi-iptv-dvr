@@ -73,6 +73,12 @@ CREATE TABLE IF NOT EXISTS vod (
 );
 CREATE INDEX IF NOT EXISTS idx_vod_grp ON vod(grp);
 
+CREATE TABLE IF NOT EXISTS vod_info (
+    vod_id INTEGER PRIMARY KEY,   -- provider's stream id, survives catalog reimports
+    json TEXT,
+    fetched INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
