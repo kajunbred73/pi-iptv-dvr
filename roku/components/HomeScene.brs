@@ -351,7 +351,11 @@ sub onContentFocused()
     else if m.mode = "categories"
         m.detail.text = txt(it.count) + " channels"
     else if m.mode = "vodcats"
-        m.detail.text = txt(it.count) + " movies"
+        if it.search = true
+            m.detail.text = "Search all movies by name"
+        else
+            m.detail.text = txt(it.count) + " movies"
+        end if
     else if m.mode = "vodlist"
         m.detail.text = txt(it.grp)
         ' Debounced: fetch plot/rating only after the highlight rests ~0.6 s,
@@ -400,11 +404,15 @@ sub onContentSelected()
         openGrid("group=" + urlEnc(it.name), txt(it.name), txt(it.count) + " channels in this category")
         m.grid.setFocus(true)
     else if m.mode = "vodcats"
-        m.mode = "vodlist"
-        m.vodGroup = txt(it.name)
-        m.heading.text = "Movies: " + txt(it.name)
-        m.hint.text = "OK: play movie   *: clear resume mark   Back: menu"
-        api("/vod?group=" + urlEnc(txt(it.name)), "vodlist")
+        if it.search = true
+            promptVodSearch()
+        else
+            m.mode = "vodlist"
+            m.vodGroup = txt(it.name)
+            m.heading.text = "Movies: " + txt(it.name)
+            m.hint.text = "OK: play movie   *: clear resume mark   Back: categories"
+            api("/vod?group=" + urlEnc(txt(it.name)), "vodlist")
+        end if
     else if m.mode = "vodlist"
         selectVodItem(it)
     else if m.mode = "recent"
@@ -714,6 +722,14 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             focusPane()
             return true
         end if
+        if m.content.hasFocus() and m.mode = "vodlist"
+            ' Back out of a movie list (category or search results) to categories.
+            m.mode = "vodcats"
+            m.heading.text = "Movies"
+            m.hint.text = "OK: open category"
+            api("/vod/groups", "vodgroups")
+            return true
+        end if
         if m.content.hasFocus() or m.grid.hasFocus()
             m.menu.setFocus(true)
             return true
@@ -781,6 +797,31 @@ sub onConfirm(ev as Object)
     else if d.action = "delete"
         api("/recordings/" + txt(p.id), "delete_ok", "DELETE", "")
     end if
+end sub
+
+sub promptVodSearch()
+    k = CreateObject("roSGNode", "KeyboardDialog")
+    k.title = "Search movies"
+    k.message = "Type part of a movie name"
+    k.text = ""
+    k.buttons = ["Search", "Cancel"]
+    k.observeField("buttonSelected", "onVodSearchEntered")
+    m.top.dialog = k
+end sub
+
+sub onVodSearchEntered(ev as Object)
+    k = ev.getRoSGNode()
+    if ev.getData() = 0
+        q = k.text.trim()
+        if q <> ""
+            m.mode = "vodlist"
+            m.vodGroup = ""
+            m.heading.text = "Movies: '" + q + "'"
+            m.hint.text = "OK: play movie   *: clear resume mark   Back: categories"
+            api("/vod?q=" + urlEnc(q), "vodlist")
+        end if
+    end if
+    k.close = true
 end sub
 
 sub promptSearch()
@@ -1852,8 +1893,8 @@ sub onApiResponse(ev as Object)
         setRows(labels, items, "No groups enabled. On the Pi web page go to Settings > Channel groups and tick the groups you watch.")
     else if tag = "vodgroups"
         if m.mode <> "vodcats" then return
-        labels = []
-        items = []
+        labels = ["Search movies"]
+        items = [{ name: "", count: 0, search: true }]
         for each g in r.items
             name = txt(g.name)
             if name = "" then name = "(no category)"
