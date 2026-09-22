@@ -28,6 +28,7 @@ DEFAULTS = {
     "timeshift_min_segments": 3,     # segments needed before the Roku starts playing
     "xtream_hls_input": False,       # pull Xtream live streams as .m3u8 instead of raw .ts
                                      # (only if the provider actually serves that endpoint)
+    "audio_delay_ms": 0,             # lip-sync trim: + delays audio, - delays video (ms)
 }
 
 _lock = threading.Lock()

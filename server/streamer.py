@@ -62,12 +62,25 @@ def _copy_args(dump_extra=True):
     # dump_extra re-inserts them before every keyframe. VOD files carry proper extradata
     # and are often HEVC, which the filter rejects - so callers can skip it.
     args = ["-map", "0:v:0?", "-map", "0:a:0?", "-c:v", "copy"]
+    vbsf = []
     if dump_extra:
-        args += ["-bsf:v", "dump_extra=freq=keyframe"]
+        vbsf.append("dump_extra=freq=keyframe")
+    delay = int(config.get("audio_delay_ms") or 0)
+    if delay < 0:
+        # Voices lag the picture: shift video later instead (audio can't be shifted
+        # earlier). TS timestamps are 90 kHz.
+        vbsf.append(f"setts=ts=TS+{-delay * 90}")
+    if vbsf:
+        args += ["-bsf:v", ",".join(vbsf)]
+    # async=1 resamples audio to stay locked to its timestamps - without it the
+    # transcoded AAC slowly drifts off the copied video (lip-sync wander).
+    af = "aresample=async=1:first_pts=0"
+    if delay > 0:
+        af += f",adelay={delay}|{delay}"
     return args + [
             # Roku only decodes AAC-LC/HE-AAC; feeds with AAC Main (or AC3/MP2) refuse to
             # start. Re-encode audio to AAC-LC - cheap compared to video, which stays copied.
-            "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+            "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-af", af,
             "-sn", "-dn",
             "-avoid_negative_ts", "make_zero", "-max_interleave_delta", "0",
             "-muxdelay", "0", "-muxpreload", "0"]
