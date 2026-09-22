@@ -15,6 +15,7 @@ import db
 log = logging.getLogger("streamer")
 
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+FFPROBE = shutil.which("ffprobe") or os.path.join(os.path.dirname(FFMPEG), "ffprobe")
 
 
 _XTREAM_TS = re.compile(r"(/live/[^/]+/[^/]+/\d+)\.ts$")
@@ -54,7 +55,56 @@ def _input_args(url, start_at=0):
     return args
 
 
-def _copy_args(dump_extra=True):
+# Audio profiles the Roku decodes natively; anything else must be re-encoded to AAC-LC.
+_ROKU_AAC_PROFILES = {"LC", "HE-AAC", "HE-AACv2"}
+_audio_probe_cache = {}
+
+
+def _probe_audio(url):
+    """(codec_name, profile) of the first audio stream, or (None, None) if the probe fails."""
+    url = _input_url(url)
+    hit = _audio_probe_cache.get(url)
+    if hit is not None:
+        return hit
+    key = "acodec:" + url
+    cached = db.get_meta(key)
+    if cached:
+        codec, _, profile = cached.partition("/")
+        _audio_probe_cache[url] = (codec, profile)
+        return codec, profile
+    cmd = [FFPROBE, "-hide_banner", "-v", "error",
+           "-analyzeduration", "3000000", "-probesize", "5000000"]
+    if url.startswith("http"):
+        cmd += ["-rw_timeout", "10000000", "-user_agent", config.get("user_agent")]
+    cmd += ["-select_streams", "a:0", "-show_entries", "stream=codec_name,profile",
+            "-of", "json", url]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        streams = json.loads(out.stdout or "{}").get("streams") or []
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        streams = []
+    if not streams:
+        return None, None
+    codec = streams[0].get("codec_name") or ""
+    profile = streams[0].get("profile") or ""
+    _audio_probe_cache[url] = (codec, profile)
+    db.set_meta(key, f"{codec}/{profile}")
+    return codec, profile
+
+
+def _audio_copyable(url):
+    mode = config.get("audio_mode")
+    if mode == "copy":
+        return True
+    if mode == "aac" or not url:
+        return False
+    codec, profile = _probe_audio(url)
+    ok = codec == "aac" and profile in _ROKU_AAC_PROFILES
+    log.info("audio probe %s/%s -> %s", codec, profile, "copy" if ok else "transcode")
+    return ok
+
+
+def _copy_args(url=None, dump_extra=True):
     # Remux only (no transcoding) so a Pi can keep up. Roku plays H.264/AAC HLS,
     # which is what nearly all IPTV sources already are.
     # Some feeds send SPS/PPS only once at stream start, so every HLS segment after the first
@@ -72,15 +122,22 @@ def _copy_args(dump_extra=True):
         vbsf.append(f"setts=ts=TS+{-delay * 90}")
     if vbsf:
         args += ["-bsf:v", ",".join(vbsf)]
-    # async=1 resamples audio to stay locked to its timestamps - without it the
-    # transcoded AAC slowly drifts off the copied video (lip-sync wander).
-    af = "aresample=async=1:first_pts=0"
-    if delay > 0:
-        af += f",adelay={delay}|{delay}"
+    if _audio_copyable(url):
+        # Source audio is already Roku-playable AAC: pass it through untouched. The encoder
+        # path re-times audio by sample count, so every gap in the feed (dropped packets,
+        # reconnects) pushes the re-encoded audio further off the copied video.
+        args += ["-c:a", "copy"]
+        if delay > 0:
+            args += ["-bsf:a", f"setts=ts=TS+{delay * 90}"]
+    else:
+        # Roku only decodes AAC-LC/HE-AAC; feeds with AAC Main (or AC3/MP2) refuse to
+        # start. Re-encode audio to AAC-LC - cheap compared to video, which stays copied.
+        # async=1 resamples audio to stay locked to its timestamps.
+        af = "aresample=async=1:first_pts=0"
+        if delay > 0:
+            af += f",adelay={delay}|{delay}"
+        args += ["-c:a", "aac", "-b:a", "128k", "-ac", "2", "-af", af]
     return args + [
-            # Roku only decodes AAC-LC/HE-AAC; feeds with AAC Main (or AC3/MP2) refuse to
-            # start. Re-encode audio to AAC-LC - cheap compared to video, which stays copied.
-            "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-af", af,
             "-sn", "-dn",
             "-avoid_negative_ts", "make_zero", "-max_interleave_delta", "0",
             "-muxdelay", "0", "-muxpreload", "0"]
@@ -99,7 +156,7 @@ class LiveSession:
     def start(self):
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir, exist_ok=True)
-        cmd = [FFMPEG] + _input_args(self.channel["url"]) + _copy_args() + [
+        cmd = [FFMPEG] + _input_args(self.channel["url"]) + _copy_args(self.channel["url"]) + [
             "-f", "hls",
             "-hls_time", str(config.get("hls_segment_seconds")),
             "-hls_list_size", str(config.get("hls_list_size")),
@@ -371,7 +428,7 @@ class Recorder:
         # Timeshift gets no -t: expiry is enforced by _tick, which can extend the stop
         # while a viewer is still watching (a baked-in -t would kill it mid-show).
         seg = "3" if timeshift else "6"
-        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args()
+        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args(ch["url"])
         if not timeshift:
             cmd += ["-t", str(duration)]
         cmd += [
@@ -457,7 +514,7 @@ class Recorder:
         shutil.rmtree(out_dir, ignore_errors=True)
         os.makedirs(out_dir, exist_ok=True)
         playlist = os.path.join(out_dir, "index.m3u8")
-        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args() + [
+        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args(ch["url"]) + [
             "-f", "hls", "-hls_time", "3", "-hls_list_size", "0",
             "-hls_playlist_type", "event",
             "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
@@ -498,7 +555,7 @@ class Recorder:
             prev_dur = sum(float(x) for x in re.findall(r"#EXTINF:([\d.]+)", text))
         except OSError:
             pass
-        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args() + [
+        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args(ch["url"]) + [
             # Continue timestamps where the previous run ended: a fresh ffmpeg would
             # rebase to 0, and a Roku playing across the boundary sees a huge
             # backward jump - audio and video come unglued there.
@@ -649,7 +706,7 @@ class VodSession:
                 self.proc.kill()
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir, exist_ok=True)
-        cmd = [FFMPEG] + _input_args(self.movie["url"], self.start_at) + _copy_args(dump_extra=False) + [
+        cmd = [FFMPEG] + _input_args(self.movie["url"], self.start_at) + _copy_args(self.movie["url"], dump_extra=False) + [
             "-f", "hls", "-hls_time", "6", "-hls_list_size", "0",
             "-hls_playlist_type", "event",
             "-hls_segment_filename", os.path.join(self.dir, "seg%05d.ts"),
