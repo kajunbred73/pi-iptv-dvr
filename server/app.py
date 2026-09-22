@@ -321,6 +321,7 @@ def api_timeshift():
 
     # Rejoin a live buffer that is still running for this channel (instant re-tune).
     rid = streamer.recorder.active_timeshift(cid)
+    continuing = rid is not None
     if rid is None:
         # Same show still airing on this channel and its old buffer exists: restart that
         # recording in place instead of adding another duplicate row.
@@ -329,9 +330,17 @@ def api_timeshift():
             "WHERE r.channel_id=? AND r.title=? AND s.stop=? AND r.status IN ('done','failed') "
             "ORDER BY r.id DESC LIMIT 1",
             (cid, f"[timeshift] {title}", stop))
-        # Single viewer: changing channel abandons the previous (un-kept) live buffer right
-        # away instead of letting several ffmpegs pile up on the Pi.
-        streamer.recorder.stop_other_timeshifts()
+        # Abandon the previous (un-kept) live buffer only when its provider connection
+        # is needed for this tune. On a multi-connection plan it keeps rolling so
+        # flipping back rejoins it with the rewind buffer intact.
+        limit = streamer.recorder.max_conn or 1
+        if streamer.recorder.connections_in_use() + 1 > limit:
+            streamer.recorder.stop_other_timeshifts()
+            # The killed streams' sockets take a moment to close on the provider's
+            # side; spawning the new ffmpeg instantly can get rejected (same fix as
+            # the VOD path - without it the provider kicks the new stream and the
+            # reconnect shows up as a jump-back on the Roku).
+            time.sleep(1)
         if streamer.recorder.connection_limit_hit():
             n = streamer.recorder.max_conn
             return jsonify({"ok": False, "error": f"Your provider only allows {n} stream(s) at once "
@@ -351,6 +360,7 @@ def api_timeshift():
         "stream_url": f"{_base_url()}/recordings/{rid}/index.m3u8",
         "title": title,
         "stop": stop,
+        "continuing": continuing,
     })
 
 

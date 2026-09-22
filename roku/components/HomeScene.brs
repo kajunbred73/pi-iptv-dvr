@@ -51,6 +51,7 @@ sub init()
     m.lastQuery = ""
     m.tasks = {}
     m.recordingId = -1
+    m.tsContinuing = false
     m.vodId = -1
     m.vodResume = 0
     m.vodOffset = 0
@@ -1737,6 +1738,7 @@ sub onApiResponse(ev as Object)
             m.streamUrl = r.stream_url
             m.playTitle = txt(m.pendingChannel.name)
             m.playChannel = m.pendingChannel
+            m.tsContinuing = (r.continuing = true or r.continuing = 1)
             addRecent({ kind: "channel", id: m.pendingChannel.id, name: txt(m.pendingChannel.name), title: txt(r.title) })
             m.readyAttempts = 0
             m.readyTimer.control = "start"
@@ -1777,7 +1779,20 @@ sub onApiResponse(ev as Object)
             ' Rejoining a buffer that was already recording (e.g. after a playback failure):
             ' start near the live edge instead of replaying from position 0.
             startPos = 0
-            if r.duration <> invalid and r.duration > 20 then startPos = r.duration - 10
+            if m.tsContinuing
+                ' The buffer kept rolling while we were away (multi-connection plan):
+                ' resume where we left off instead of jumping to the live edge.
+                saved = m.reg.read("pos_" + m.recordingId.toStr())
+                if saved <> invalid and saved <> ""
+                    startPos = Val(saved)
+                    if r.duration <> invalid and startPos > r.duration - 5 then startPos = r.duration - 10
+                    if startPos < 0 then startPos = 0
+                end if
+            else
+                ' Fresh or restarted buffer: any saved position for this id is stale.
+                m.reg.delete("pos_" + m.recordingId.toStr())
+            end if
+            if startPos = 0 and r.duration <> invalid and r.duration > 20 then startPos = r.duration - 10
             play(m.streamUrl, m.playTitle, true, startPos)
         else if txt(r.status) <> "recording"
             m.readyTimer.control = "stop"
