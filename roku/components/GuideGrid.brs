@@ -6,7 +6,7 @@ sub init()
     m.GRID_W = 1080
     m.ROW_H = 74
     m.GAP = 4
-    m.VISIBLE = 10
+    m.VISIBLE = 8
     m.timebar = m.top.findNode("timebar")
     m.rows = m.top.findNode("rows")
     m.nowline = m.top.findNode("nowline")

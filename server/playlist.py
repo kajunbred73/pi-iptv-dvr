@@ -153,14 +153,16 @@ def import_m3u(url=None):
         config.save({"m3u_url": url})
     source = _xtream_channels() if xtream else _m3u_channels()
     c = db.conn()
-    favs = {r["url"]: r["favorite"] for r in db.rows("SELECT url, favorite FROM channels")}
+    favs = {r["url"]: (r["favorite"], r["fav_order"])
+            for r in db.rows("SELECT url, favorite, fav_order FROM channels")}
     count = 0
     groups = {}
     c.execute("DELETE FROM channels")
     for i, ch in enumerate(source, 1):
+        fav, forder = favs.get(ch["url"], (0, 0))
         c.execute(
-            "INSERT INTO channels(num, name, tvg_id, logo, grp, url, favorite) VALUES(?,?,?,?,?,?,?)",
-            (ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"], ch["grp"], ch["url"], favs.get(ch["url"], 0)),
+            "INSERT INTO channels(num, name, tvg_id, logo, grp, url, favorite, fav_order) VALUES(?,?,?,?,?,?,?,?)",
+            (ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"], ch["grp"], ch["url"], fav, forder),
         )
         groups[ch["grp"]] = groups.get(ch["grp"], 0) + 1
         count += 1

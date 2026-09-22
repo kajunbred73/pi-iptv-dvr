@@ -18,8 +18,8 @@
     <Group id="menuBar" translation="[40,56]" visible="false" />
     <Label id="empty" translation="[470,200]" width="1390" wrap="true" font="font:MediumSystemFont" color="#66707A" visible="false" />
 
-    <Rectangle id="detailBg" translation="[470,830]" width="1390" height="230" color="#161C22" />
-    <Label id="detail" translation="[490,842]" width="1350" height="212" wrap="true" maxLines="8" font="font:SmallestSystemFont" color="#AAB4BE" />
+    <Rectangle id="detailBg" translation="[470,846]" width="1390" height="224" color="#161C22" />
+    <Label id="detail" translation="[490,856]" width="1350" height="200" wrap="true" maxLines="7" font="font:SmallestSystemFont" color="#AAB4BE" />
     <Label id="hint" translation="[60,960]" width="340" height="80" wrap="true" font="font:SmallestSystemFont" color="#66707A" />
 
     <Video id="video" width="1920" height="1080" visible="false" enableUI="true" />
