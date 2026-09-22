@@ -753,6 +753,20 @@ def start():
     recorder.start()
 
 
+def shutdown():
+    """Terminate all ffmpeg processes before an intentional server restart, so no
+    orphaned muxer keeps a provider connection open after systemd restarts us."""
+    for s in list(live.sessions.values()):
+        if s.alive():
+            s.proc.terminate()
+    for s in list(vod.sessions.values()):
+        if s.alive():
+            s.proc.terminate()
+    for proc, _ in list(recorder.active.values()):
+        if proc.poll() is None:
+            proc.terminate()
+
+
 def delete_recording(rid):
     rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,))
     if not rec:

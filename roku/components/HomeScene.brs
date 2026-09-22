@@ -328,7 +328,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Clear all movie resume marks", "Version 1.1 build 32"], ["server", "refresh", "vodclear", "version"])
+    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Clear all movie resume marks", "Restart the Pi server", "Version 1.1 build 32"], ["server", "refresh", "vodclear", "restart", "version"])
 end sub
 
 sub onContentFocused()
@@ -444,6 +444,8 @@ sub onContentSelected()
         else if it = "refresh"
             toast("Refreshing on server...")
             api("/refresh", "refresh", "POST", "{}")
+        else if it = "restart"
+            confirm("Restart the Pi server? Streams stop and it takes ~10 seconds to come back.", "restart", {})
         else if it = "vodclear"
             n = 0
             for each k in m.reg.getKeyList()
@@ -796,6 +798,8 @@ sub onConfirm(ev as Object)
         api("/schedules/" + txt(p.id), "cancel_ok", "DELETE", "")
     else if d.action = "delete"
         api("/recordings/" + txt(p.id), "delete_ok", "DELETE", "")
+    else if d.action = "restart"
+        api("/restart", "restart_ok", "POST", "{}")
     end if
 end sub
 
@@ -2020,5 +2024,7 @@ sub onApiResponse(ev as Object)
     else if tag = "refresh"
         if r.started = true then toast("Import started on server; it may take a few minutes") else toast("Import already running")
         loadStatus()
+    else if tag = "restart_ok"
+        toast("Pi server restarting - back in about 10 seconds")
     end if
 end sub

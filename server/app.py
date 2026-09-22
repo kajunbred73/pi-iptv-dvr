@@ -593,6 +593,18 @@ def api_refresh():
     return jsonify({"started": started, "import": playlist.state})
 
 
+@app.post("/api/restart")
+def api_restart():
+    """Restart the server: answer first, then stop ffmpegs and exit - systemd's
+    Restart=always brings the service back in ~5 s."""
+    def _bye():
+        time.sleep(1)
+        streamer.shutdown()
+        os._exit(0)
+    threading.Thread(target=_bye, daemon=True).start()
+    return jsonify({"ok": True, "restarting": True})
+
+
 @app.get("/api/import-status")
 def api_import_status():
     return jsonify(playlist.state)
