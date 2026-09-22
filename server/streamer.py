@@ -474,7 +474,7 @@ class Recorder:
             return False
         out_dir = os.path.join(config.get("recordings_dir"), rec["path"])
         playlist = os.path.join(out_dir, "index.m3u8")
-        nseg = 0
+        nseg, prev_dur = 0, 0.0
         try:
             text = open(playlist).read()
             if "#EXT-X-ENDLIST" in text:
@@ -482,12 +482,17 @@ class Recorder:
                 with open(playlist, "w") as f:
                     f.write(text.replace("#EXT-X-ENDLIST\n", "").replace("#EXT-X-ENDLIST", ""))
             nseg = len([x for x in os.listdir(out_dir) if re.fullmatch(r"seg\d+\.ts", x)])
+            prev_dur = sum(float(x) for x in re.findall(r"#EXTINF:([\d.]+)", text))
         except OSError:
             pass
         cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args() + [
+            # Continue timestamps where the previous run ended: a fresh ffmpeg would
+            # rebase to 0, and a Roku playing across the boundary sees a huge
+            # backward jump - audio and video come unglued there.
+            "-output_ts_offset", f"{prev_dur:.3f}",
             "-f", "hls", "-hls_time", "3", "-hls_list_size", "0",
             "-hls_playlist_type", "event",
-            "-hls_flags", "append_list",
+            "-hls_flags", "append_list+discont_start",
             "-start_number", str(nseg),
             "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
             playlist,
