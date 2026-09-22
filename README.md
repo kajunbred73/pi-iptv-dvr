@@ -164,6 +164,10 @@ Starring is stored on the Pi, so favorites set on the Roku also show first in th
 * **Roku says "Playback error"** – the provider stream isn't H.264/AAC (Roku can't play HEVC/MPEG-2
   audio from most models) or the Pi couldn't open the URL. Check `journalctl -u pi-iptv-dvr` and try the
   channel in VLC via `http://<pi-ip>:8080/playlist.m3u`.
+* **Audio out of sync with video** – audio is passed through untouched when the feed is already
+  AAC-LC/HE-AAC and only re-encoded otherwise (`audio_mode`: `auto` / `copy` / `aac` in `/api/config`).
+  Re-encoding re-times audio by sample count, so gappy feeds drift; force `copy` if a channel still drifts,
+  and use `audio_delay_ms` (+ delays audio, − delays video) for feeds whose source sync is simply off.
 * **Live channel takes ~5–10 s to start** – normal; ffmpeg waits for a keyframe to cut the first segment.
 * **Provider blocks the Pi** – some providers whitelist one user-agent/IP. Change `user_agent` in
   `/api/config` and keep only one stream open per connection allowance.
