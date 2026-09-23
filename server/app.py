@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.request
@@ -94,6 +95,36 @@ def _refresh_loop():
 
 
 threading.Thread(target=_refresh_loop, daemon=True).start()
+
+
+def _roku_watch_loop():
+    """Autolaunch the sideloaded app when the Roku (re)boots. Roku players have no
+    built-in launch-on-startup, but ECP exposes the device uptime - when it drops
+    back near zero the box restarted, so we POST /launch/dev ourselves."""
+    launched_this_boot = False
+    while True:
+        ip = config.get("roku_ip")
+        if ip:
+            try:
+                with urllib.request.urlopen(f"http://{ip}:8060/query/device-info",
+                                            timeout=3) as r:
+                    data = r.read()
+                m = re.search(rb"<uptime>(\d+)</uptime>", data)
+                up = int(m.group(1)) if m else None
+                if up is not None:
+                    if up < 120 and not launched_this_boot:
+                        urllib.request.urlopen(f"http://{ip}:8060/launch/dev",
+                                               data=b"", timeout=3)
+                        launched_this_boot = True
+                        log.info("Roku rebooted (uptime %ds) - launched app", up)
+                    elif up >= 300:
+                        launched_this_boot = False
+            except Exception:
+                pass
+        time.sleep(15)
+
+
+threading.Thread(target=_roku_watch_loop, daemon=True).start()
 
 
 # ---------------------------------------------------------------- JSON API (used by Roku)
