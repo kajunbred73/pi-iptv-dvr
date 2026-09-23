@@ -453,6 +453,15 @@ class Recorder:
             self.timeshift.pop(rid, None)
 
     def _finalize(self, sid, rid, rc):
+        # A stale reap can fire after the recording was restarted under a newer
+        # schedule (reuse_timeshift flips the row back to 'recording' and spawns a
+        # new ffmpeg). Writing ENDLIST/'done' now would corrupt the live playlist
+        # and bounce the viewer into a retune loop.
+        if sid is not None:
+            latest = db.row("SELECT id FROM schedules WHERE recording_id=? ORDER BY id DESC LIMIT 1", (rid,))
+            if latest and latest["id"] != sid:
+                log.info("finish for rec=%s sid=%s superseded by sched=%s - skipping", rid, sid, latest["id"])
+                return
         rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,))
         out_dir = os.path.join(config.get("recordings_dir"), rec["path"]) if rec else None
         size, ok = 0, False
@@ -493,8 +502,12 @@ class Recorder:
     def active_timeshift(self, cid):
         """recording_id of a live buffer still running for this channel, or None."""
         with self.lock:
-            rids = list(self.timeshift)
-        for rid in rids:
+            rids = [(rid, t["sid"]) for rid, t in self.timeshift.items()]
+        for rid, sid in rids:
+            with self.lock:
+                entry = self.active.get(sid)
+            if entry is None or entry[0].poll() is not None:
+                continue
             rec = db.row("SELECT id FROM recordings WHERE id=? AND channel_id=? AND status='recording'", (rid, cid))
             if rec:
                 return rid
@@ -510,8 +523,11 @@ class Recorder:
         if not ch:
             return None
         now = int(time.time())
-        out_dir = os.path.join(config.get("recordings_dir"), rec["path"])
-        shutil.rmtree(out_dir, ignore_errors=True)
+        # Fresh folder per restart: the previous ffmpeg can still be shutting down
+        # and writing its final segments - two processes writing same-named files
+        # corrupts the playlist and the player loops.
+        folder = f"ts-{rid}-{now}"
+        out_dir = os.path.join(config.get("recordings_dir"), folder)
         os.makedirs(out_dir, exist_ok=True)
         playlist = os.path.join(out_dir, "index.m3u8")
         cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args(ch["url"]) + [
@@ -529,8 +545,9 @@ class Recorder:
             self.active[sid] = (proc, rid)
             self.spawned[sid] = now
             self.timeshift[rid] = {"sid": sid, "touch": now, "keep": False}
-        db.execute("UPDATE recordings SET status='recording', start=?, stop=?, size_bytes=0 WHERE id=?",
-                   (now, stop, rid))
+        db.execute("UPDATE recordings SET status='recording', start=?, stop=?, size_bytes=0, path=? WHERE id=?",
+                   (now, stop, folder, rid))
+        shutil.rmtree(os.path.join(config.get("recordings_dir"), rec["path"]), ignore_errors=True)
         log.info("timeshift restart in place rec=%s", rid)
         return rid
 
