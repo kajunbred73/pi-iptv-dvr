@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import threading
 
@@ -45,8 +46,14 @@ def load():
             os.makedirs(DATA_DIR, exist_ok=True)
             _cfg = dict(DEFAULTS)
             if os.path.exists(CONFIG_PATH):
-                with open(CONFIG_PATH) as f:
-                    _cfg.update(json.load(f))
+                try:
+                    with open(CONFIG_PATH) as f:
+                        _cfg.update(json.load(f))
+                except (json.JSONDecodeError, OSError) as e:
+                    # A hand-edited config typo must not take the whole server down;
+                    # fall back to defaults and keep serving.
+                    logging.getLogger("iptv").error(
+                        "config.json unreadable (%s) - using defaults", e)
             os.makedirs(_cfg["recordings_dir"], exist_ok=True)
             os.makedirs(_cfg["live_dir"], exist_ok=True)
             os.makedirs(_cfg["vod_dir"], exist_ok=True)
