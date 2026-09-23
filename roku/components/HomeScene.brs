@@ -678,7 +678,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
         if key = "back"
             if m.top.dialog <> invalid
                 if m.top.dialog.loading = true
-                    stopVideo()
+                    stopVideo(false, true)
                 else
                     m.top.dialog.close = true
                     m.top.dialog = invalid
@@ -686,7 +686,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
                 end if
                 return true
             end if
-            stopVideo()
+            stopVideo(false, true)
             return true
         else if key = "down" or key = "OK"
             if m.top.dialog = invalid and not m.guideOverlay then trickMenu()
@@ -1117,7 +1117,7 @@ end sub
 ' Something went wrong starting/playing video: stop and tell the user why (a toast is hidden
 ' behind the loading box, so use a real dialog).
 sub playError(msg as String)
-    stopVideo()
+    stopVideo(false, true)
     d = CreateObject("roSGNode", "Dialog")
     d.title = "Can't play"
     d.message = msg
@@ -1493,8 +1493,15 @@ sub onSportsChannel(ev as Object)
 end sub
 
 sub playChannel(ch as Object)
+    ' Stop the current show's player as soon as a new one is picked: letting it
+    ' keep streaming during the tune leaves the video node attached to the old
+    ' buffer, and the swap is what shows up as a cut-out/jump-back on the new show.
+    ' The buffer itself is released server-side by the /timeshift call (it keeps
+    ' rolling only when the provider's connection limit allows it).
+    if m.video.visible then stopVideo()
     m.pendingChannel = ch
     m.recordingId = -1
+    m.tsContinuing = false
     m.vodId = -1
     m.playTitle = ch.name
     showLoading("Tuning...")
@@ -1574,7 +1581,7 @@ sub focusVideo()
     m.video.setFocus(true)
 end sub
 
-sub stopVideo(clearResume = false)
+sub stopVideo(clearResume = false, release = false)
     key = ""
     if m.vodId >= 0
         key = "vpos_" + m.vodId.toStr()
@@ -1627,6 +1634,10 @@ sub stopVideo(clearResume = false)
         ' Release the provider connection and the muxed files on the Pi right away
         ' instead of letting them sit until the idle reaper runs.
         api("/vod/" + m.vodId.toStr() + "/stop", "vodstop", "POST", "")
+    else if release and m.isLive and m.recordingId >= 0
+        ' Backed out of live TV: stop the buffer now instead of holding the
+        ' provider connection for the whole idle timeout. Kept buffers refuse.
+        api("/timeshift/" + m.recordingId.toStr() + "/stop", "tsstop", "POST", "")
     end if
     m.recordingId = -1
     m.vodId = -1
@@ -1673,7 +1684,7 @@ sub onVideoState()
             if m.isLive
                 playError("The live buffer stopped producing video (" + txt(m.lastSegs) + " segments). " + m.lastErr)
             else
-                stopVideo(true)
+                stopVideo(true, true)
             end if
         end if
     end if
@@ -1711,7 +1722,7 @@ end sub
 
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
-    if t.tag = "touch" or t.tag = "vodinfo" then return
+    if t.tag = "touch" or t.tag = "vodinfo" or t.tag = "tsstop" or t.tag = "vodstop" then return
     if t.tag = "timeshift" or t.tag = "readycheck" or t.tag = "rejoin" or t.tag = "vodplay"
         m.readyTimer.control = "stop"
         playError("The Pi did not answer " + t.url + Chr(10) + t.error + Chr(10) + "If this says HTTP 404, the Pi is running old server code: cd pi-iptv-dvr && git pull && sudo systemctl restart pi-iptv-dvr")
@@ -1832,7 +1843,7 @@ sub onApiResponse(ev as Object)
                 m.pendingChannel = m.playChannel
                 api("/timeshift", "timeshift", "POST", FormatJson({ channel_id: m.playChannel.id }))
             else
-                stopVideo(true)
+                stopVideo(true, true)
             end if
         else
             playError("The Pi stopped this channel's recording (" + txt(r.status) + "). " + txt(r.error))

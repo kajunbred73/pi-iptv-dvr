@@ -582,6 +582,33 @@ class Recorder:
                 t["touch"] = int(time.time())
             return t is not None
 
+    def _reap_proc(self, proc, sid, rid):
+        def _reap():
+            try:
+                proc.wait(10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            self._finish(sid, rid, proc.returncode)
+        threading.Thread(target=_reap, daemon=True).start()
+
+    def stop_timeshift(self, rid):
+        """Stop one live buffer now (viewer backed out of it). Kept buffers and
+        recordings that aren't live buffers are left alone."""
+        with self.lock:
+            t = self.timeshift.get(rid)
+            if t is None or t["keep"]:
+                return False
+            self.timeshift.pop(rid, None)
+            entry = self.active.pop(t["sid"], None)
+        db.execute("UPDATE schedules SET status='cancelled' WHERE id=? AND status IN ('scheduled','recording')",
+                   (t["sid"],))
+        if entry is not None:
+            if entry[0].poll() is None:
+                entry[0].terminate()
+            self._reap_proc(entry[0], t["sid"], rid)
+        return True
+
     def stop_other_timeshifts(self):
         """Stop every un-kept live buffer now (viewer changed channel); finish them off-thread."""
         with self.lock:
@@ -596,15 +623,7 @@ class Recorder:
             proc = entry[0]
             if proc.poll() is None:
                 proc.terminate()
-
-            def _reap(p=proc, s=sid, r=rid):
-                try:
-                    p.wait(10)
-                except subprocess.TimeoutExpired:
-                    p.kill()
-                    p.wait()
-                self._finish(s, r, p.returncode)
-            threading.Thread(target=_reap, daemon=True).start()
+            self._reap_proc(proc, sid, rid)
 
     def keep_timeshift(self, rid):
         with self.lock:

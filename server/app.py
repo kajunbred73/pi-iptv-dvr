@@ -377,6 +377,13 @@ def api_timeshift_keep(rid):
     return jsonify({"ok": True})
 
 
+@app.post("/api/timeshift/<int:rid>/stop")
+def api_timeshift_stop(rid):
+    """Viewer left a live buffer without tuning elsewhere: stop it now instead of
+    holding the provider connection until the idle timeout. Kept buffers refuse."""
+    return jsonify({"ok": True, "stopped": streamer.recorder.stop_timeshift(rid)})
+
+
 @app.post("/api/timeshift/<int:rid>/touch")
 def api_timeshift_touch(rid):
     """Heartbeat from a viewer; un-touched live buffers are stopped after timeshift_idle_seconds."""
