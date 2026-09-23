@@ -97,30 +97,47 @@ def _refresh_loop():
 threading.Thread(target=_refresh_loop, daemon=True).start()
 
 
+def _roku_launch(ip, why):
+    try:
+        urllib.request.urlopen(f"http://{ip}:8060/launch/dev", data=b"", timeout=3)
+        log.info("Roku autolaunch fired (%s)", why)
+        return True
+    except Exception as e:
+        log.warning("Roku autolaunch failed: %s", e)
+        return False
+
+
 def _roku_watch_loop():
-    """Autolaunch the sideloaded app when the Roku (re)boots. Roku players have no
-    built-in launch-on-startup, but ECP exposes the device uptime - when it drops
-    back near zero the box restarted, so we POST /launch/dev ourselves."""
+    """Autolaunch the sideloaded app when the Roku (re)boots or powers on.
+    Two signals: device-info uptime near zero (restart), or the box coming back
+    online after >60s unreachable (Rokus powered from a TV USB port go fully
+    offline when the TV is off)."""
     launched_this_boot = False
+    down_since = None
     while True:
         ip = config.get("roku_ip")
-        if ip:
-            try:
-                with urllib.request.urlopen(f"http://{ip}:8060/query/device-info",
-                                            timeout=3) as r:
-                    data = r.read()
-                m = re.search(rb"<uptime>(\d+)</uptime>", data)
-                up = int(m.group(1)) if m else None
-                if up is not None:
-                    if up < 120 and not launched_this_boot:
-                        urllib.request.urlopen(f"http://{ip}:8060/launch/dev",
-                                               data=b"", timeout=3)
-                        launched_this_boot = True
-                        log.info("Roku rebooted (uptime %ds) - launched app", up)
-                    elif up >= 300:
-                        launched_this_boot = False
-            except Exception:
-                pass
+        if not ip:
+            time.sleep(15)
+            continue
+        try:
+            with urllib.request.urlopen(f"http://{ip}:8060/query/device-info",
+                                        timeout=3) as r:
+                data = r.read()
+            m = re.search(rb"<uptime>(\d+)</uptime>", data)
+            up = int(m.group(1)) if m else None
+            booted = (up is not None and up < 120) or \
+                     (down_since is not None and time.time() - down_since > 60)
+            if booted and not launched_this_boot:
+                why = f"uptime={up}s" if up is not None and up < 120 else \
+                      f"back online after {int(time.time() - down_since)}s"
+                launched_this_boot = _roku_launch(ip, why)
+            elif up is not None and up >= 300 and down_since is None:
+                launched_this_boot = False
+            down_since = None
+        except Exception:
+            if down_since is None:
+                down_since = time.time()
+            launched_this_boot = False
         time.sleep(15)
 
 
