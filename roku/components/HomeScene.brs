@@ -1729,7 +1729,11 @@ sub onApiError(ev as Object)
         return
     end if
     if t.tag = "status"
-        m.status.text = "Cannot reach " + m.server
+        m.status.text = "Cannot reach " + m.server + " - retrying..."
+        ' Retry quickly after a failure: on boot the app can come up before the
+        ' Pi's service does, and 30s of "Cannot reach" looks like it's broken.
+        m.statusTimer.duration = 5
+        m.statusTimer.control = "start"
     else
         toast("Error: " + t.error)
         if t.tag = "channels" or t.tag = "groups" or t.tag = "recordings" or t.tag = "schedules" or t.tag = "vodgroups" or t.tag = "vodlist"
@@ -1742,6 +1746,7 @@ sub onApiResponse(ev as Object)
     r = ev.getData()
     tag = r.tag
     if tag = "status"
+        m.statusTimer.duration = 30
         m.status.text = txt(r.channels) + " channels  |  " + txt(r.recordings) + " recordings  |  " + m.server
     else if tag = "timeshift"
         if r.ok = true or r.ok = 1
