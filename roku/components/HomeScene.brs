@@ -466,6 +466,10 @@ sub toggleFavorite(ch as Object)
     body = "{""favorite"": false}"
     if fav then body = "{""favorite"": true}"
     api("/channels/" + txt(ch.id) + "/favorite", "fav_ok", "POST", body)
+    if type(ch) = "roAssociativeArray"
+        ' Keep the in-memory flag in sync so menu labels are right on reopen.
+        if fav then ch.favorite = 1 else ch.favorite = 0
+    end if
     if fav then toast("Added " + txt(ch.name) + " to Favorites") else toast("Removed " + txt(ch.name) + " from Favorites")
 end sub
 
@@ -1538,6 +1542,14 @@ sub trickMenu()
         buttons = ["Pause", "Back 30s", "Forward 30s", "Jump to live", "Keep recording"]
         actions = ["pause", "back30", "fwd30", "live", "keep"]
     end if
+    if m.isLive and m.playChannel <> invalid
+        if m.playChannel.favorite = 1
+            buttons.push("Remove from Favorites")
+        else
+            buttons.push("Add to Favorites")
+        end if
+        actions.push("fav")
+    end if
     d.buttons = buttons
     d.addField("actions", "array", false)
     d.addField("recordingId", "integer", false)
@@ -1570,6 +1582,8 @@ sub onTrickMenu(ev as Object)
         if d.recordingId > 0
             api("/timeshift/" + d.recordingId.toStr() + "/keep", "keep", "POST", "")
         end if
+    else if action = "fav"
+        if m.playChannel <> invalid then toggleFavorite(m.playChannel)
     end if
     focusVideo()
 end sub
