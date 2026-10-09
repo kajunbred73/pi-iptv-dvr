@@ -28,6 +28,11 @@ function pxPerMin() as float
     return m.GRID_W / mins
 end function
 
+function isHeaderRow(r as integer) as boolean
+    if r < 0 or r >= m.chans.count() then return false
+    return m.chans[r].header = true
+end function
+
 sub onData()
     d = m.top.data
     if d = invalid or d.channels = invalid then
@@ -37,6 +42,20 @@ sub onData()
     end if
     if m.top.focusRow >= m.chans.count() then m.top.focusRow = 0
     if m.top.focusRow < 0 then m.top.focusRow = 0
+    ' Section headers aren't selectable: nudge focus onto a real channel.
+    if isHeaderRow(m.top.focusRow)
+        nr = m.top.focusRow + 1
+        while nr < m.chans.count() and isHeaderRow(nr)
+            nr = nr + 1
+        end while
+        if nr >= m.chans.count()
+            nr = m.top.focusRow - 1
+            while nr >= 0 and isHeaderRow(nr)
+                nr = nr - 1
+            end while
+        end if
+        if nr >= 0 and nr < m.chans.count() then m.top.focusRow = nr
+    end if
     ' keep column pointing at whatever is on now for the focused row
     m.focusCol = colAtNow(m.top.focusRow)
     clampScroll()
@@ -141,6 +160,11 @@ sub render()
         ch = m.chans[r]
         y = (r - m.firstRow) * (m.ROW_H + m.GAP)
         isRow = (r = m.top.focusRow)
+        if ch.header = true
+            ' Section divider (e.g. "* FAVORITES" / "ALL CHANNELS").
+            m.rows.appendChild(mkLabel(14, y, m.CHAN_W + m.GRID_W - 28, m.ROW_H, ch.title, "#8A94A0", "font:SmallestSystemFont"))
+            m.rows.appendChild(mkRect(0, y + m.ROW_H - 4, m.CHAN_W + m.GRID_W - 6, 2, "#3D6BFF"))
+        else
         chBg = "#1C222A"
         if isRow then chBg = "#2A3340"
         m.rows.appendChild(mkRect(0, y, m.CHAN_W - 6, m.ROW_H, chBg))
@@ -192,6 +216,7 @@ sub render()
                 end if
             end for
         end if
+        end if
     end for
     updateDetail()
 end sub
@@ -210,6 +235,10 @@ sub updateDetail()
         return
     end if
     ch = m.chans[m.top.focusRow]
+    if ch.header = true
+        m.top.detail = ch.title
+        return
+    end if
     progs = ch.programs
     if progs = invalid or progs.count() = 0 or m.focusCol >= progs.count()
         m.top.detail = ch.name
@@ -237,17 +266,26 @@ function onKeyEvent(key as string, press as boolean) as boolean
         return false
     end if
     if key = "down"
-        if m.top.focusRow < n - 1
-            m.top.focusRow = m.top.focusRow + 1
-            m.focusCol = colAtNow(m.top.focusRow)
+        ' Skip section-header rows: they aren't selectable.
+        nr = m.top.focusRow + 1
+        while nr < n and isHeaderRow(nr)
+            nr = nr + 1
+        end while
+        if nr < n
+            m.top.focusRow = nr
+            m.focusCol = colAtNow(nr)
             clampScroll()
             render()
         end if
         return true
     else if key = "up"
-        if m.top.focusRow > 0
-            m.top.focusRow = m.top.focusRow - 1
-            m.focusCol = colAtNow(m.top.focusRow)
+        nr = m.top.focusRow - 1
+        while nr >= 0 and isHeaderRow(nr)
+            nr = nr - 1
+        end while
+        if nr >= 0
+            m.top.focusRow = nr
+            m.focusCol = colAtNow(nr)
             clampScroll()
             render()
             return true
@@ -255,6 +293,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
         ' at the top row let Up bubble so the scene can focus the overlay menu bar
         return false
     else if key = "right"
+        if isHeaderRow(m.top.focusRow) then return true
         progs = m.chans[m.top.focusRow].programs
         if progs <> invalid and m.focusCol < progs.count() - 1
             m.focusCol = m.focusCol + 1
@@ -264,6 +303,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
         end if
         return true
     else if key = "left"
+        if isHeaderRow(m.top.focusRow) then return true
         if m.focusCol > 0
             m.focusCol = m.focusCol - 1
             render()
@@ -281,11 +321,13 @@ function onKeyEvent(key as string, press as boolean) as boolean
         return true
     else if key = "OK"
         ch = m.chans[m.top.focusRow]
+        if ch.header = true then return true
         pr = invalid
         if ch.programs <> invalid and m.focusCol < ch.programs.count() then pr = ch.programs[m.focusCol]
         m.top.selected = {channel: ch, program: pr}
         return true
     else if key = "options"
+        if isHeaderRow(m.top.focusRow) then return true
         m.top.favToggle = m.chans[m.top.focusRow]
         return true
     end if

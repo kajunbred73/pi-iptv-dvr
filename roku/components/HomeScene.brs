@@ -44,6 +44,13 @@ sub init()
     m.statusTimer.observeField("fire", "loadStatus")
     m.sleepTimer = m.top.findNode("sleepTimer")
     m.sleepTimer.observeField("fire", "onSleepTimer")
+    m.nowBar = m.top.findNode("nowBar")
+    m.nowBarText = m.top.findNode("nowBarText")
+    m.nowBarTimer = m.top.findNode("nowBarTimer")
+    m.nowBarTimer.observeField("fire", "onNowBarTimer")
+    m.zapLabel = m.top.findNode("zapLabel")
+    m.zapTimer = m.top.findNode("zapTimer")
+    m.zapTimer.observeField("fire", "onZapTimer")
 
     m.items = []          ' data rows backing the content list
     m.mode = "grid"       ' grid | list | categories | recordings | scheduled | settings
@@ -83,6 +90,11 @@ sub init()
     m.playChannel = invalid
     m.lastChannel = invalid
     m.sleepUntil = 0
+    m.zapText = ""
+    m.zapNum = 0
+    m.playStop = 0
+    m.cwItems = []
+    m.recCache = invalid
     m.finishPos = 0
     m.lastErr = ""
     m.lastSegs = 0
@@ -288,12 +300,14 @@ sub showTab(idx as Integer)
             m.heading.text = "Search: " + m.lastQuery
             api("/search?q=" + urlEnc(m.lastQuery), "search")
         else
-            setRows([], [], "Press OK to search channels and shows (e.g. ABC, ESPN, Astros).")
+            showSearchHome()
         end if
     else if tabName = "Recent"
         m.mode = "recent"
-        m.hint.text = "OK: watch   *: remove"
+        m.hint.text = "OK: watch   *: remove / clear resume"
         renderRecents()
+        ' Recordings with saved positions power the RESUME rows at the top.
+        api("/recordings", "cw")
     else if tabName = "Categories"
         m.mode = "categories"
         m.hint.text = "OK: open category guide"
@@ -341,7 +355,14 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Refresh playlist and guide on server", "Clear all movie resume marks", "Restart the Pi server", "Version 1.1 build 32"], ["server", "refresh", "vodclear", "restart", "version"])
+    setRows(["Server address: " + m.server, "Server status and health", "Refresh playlist and guide on server", "Clear all movie resume marks", "Restart the Pi server", "Version 1.1 build 38"], ["server", "health", "refresh", "vodclear", "restart", "version"])
+end sub
+
+sub onHealthDialog(ev as Object)
+    d = ev.getRoSGNode()
+    d.close = true
+    m.top.dialog = invalid
+    focusPane()
 end sub
 
 sub onContentFocused()
@@ -349,7 +370,13 @@ sub onContentFocused()
     if i < 0 or i >= m.items.count() then return
     it = m.items[i]
     if m.mode = "list"
-        if it.kind = "program"
+        if it.kind = "hist"
+            if it.q = ""
+                m.detail.text = "Type a new search"
+            else
+                m.detail.text = "Run this search again (* removes it)"
+            end if
+        else if it.kind = "program"
             p = it.p
             m.detail.text = txt(p.channel_name) + "   " + fmtDay(p.start) + " " + fmtTime(p.start) + " - " + fmtTime(p["stop"])
         else
@@ -380,7 +407,13 @@ sub onContentFocused()
         end if
     else if m.mode = "recent"
         if it.kind = "movie"
-            m.detail.text = "Movie"
+            if it.pos <> invalid
+                m.detail.text = "Movie - resume at " + fmtDuration(it.pos)
+            else
+                m.detail.text = "Movie"
+            end if
+        else if it.kind = "rec"
+            m.detail.text = "Resume " + txt(it.title) + " from " + fmtDuration(it.pos) + "   (* clears the mark)"
         else
             m.detail.text = txt(it.title)
         end if
@@ -408,7 +441,16 @@ sub onContentSelected()
     if i < 0 or i >= m.items.count() then return
     it = m.items[i]
     if m.mode = "list"
-        if it.kind = "program"
+        if it.kind = "hist"
+            if it.q = ""
+                promptSearch()
+            else
+                m.lastQuery = it.q
+                m.mode = "list"
+                m.heading.text = "Search: " + it.q
+                api("/search?q=" + urlEnc(it.q), "search")
+            end if
+        else if it.kind = "program"
             programMenu(it.p)
         else
             channelMenu(it.ch, it.ch.now)
@@ -431,6 +473,10 @@ sub onContentSelected()
     else if m.mode = "recent"
         if it.kind = "movie"
             selectVodItem(it)
+        else if it.kind = "rec"
+            ' Continue Watching row: jump straight into the resume dialog.
+            m.recordingId = it.id
+            showResumeDialog(it.url, it.title, false, it.pos, it.id)
         else
             playChannel({ id: it.id, name: it.name })
         end if
@@ -454,6 +500,8 @@ sub onContentSelected()
     else if m.mode = "settings"
         if it = "server"
             promptServer()
+        else if it = "health"
+            api("/status", "health")
         else if it = "refresh"
             toast("Refreshing on server...")
             api("/refresh", "refresh", "POST", "{}")
@@ -489,6 +537,20 @@ sub favoriteFocused()
     i = m.content.itemFocused
     if i < 0 or i >= m.items.count() then return
     it = m.items[i]
+    if it.kind = "hist"
+        ' * on a saved search removes it from history.
+        if it.q <> ""
+            hist = loadSearchHist()
+            for j = hist.count() - 1 to 0 step -1
+                if hist[j] = it.q then hist.delete(j)
+            end for
+            m.reg.write("searches", FormatJson(hist))
+            m.reg.flush()
+            if m.lastQuery = "" then showSearchHome()
+            toast("Removed from search history")
+        end if
+        return
+    end if
     if it.kind = "channel" then toggleFavorite(it.ch)
 end sub
 
@@ -499,18 +561,44 @@ sub deleteFocused()
     confirm("Delete recording '" + txt(it.title) + "'?", "delete", { id: it.id })
 end sub
 
+' Favorites sort first in every grid; insert divider pseudo-rows where the list
+' transitions so the starred channels read as their own section.
+function withSectionHeaders(chans as Object) as Object
+    hasFav = false
+    hasPlain = false
+    for each c in chans
+        if c.favorite = 1 then hasFav = true else hasPlain = true
+    end for
+    if not (hasFav and hasPlain) then return chans
+    out = []
+    favHdr = false
+    allHdr = false
+    for each c in chans
+        if c.favorite = 1 and not favHdr
+            out.push({ header: true, title: "* FAVORITES" })
+            favHdr = true
+        else if c.favorite <> 1 and not allHdr
+            out.push({ header: true, title: "ALL CHANNELS" })
+            allHdr = true
+        end if
+        out.push(c)
+    end for
+    return out
+end function
+
 ' ---- guide grid events
 
 sub onGridSelected()
     sel = m.grid.selected
     if sel = invalid or sel.channel = invalid then return
+    if sel.channel.header = true then return
     if m.guideOverlay then hideGuideOverlay()
     channelMenu(sel.channel, sel.program)
 end sub
 
 sub onGridFav()
     ch = m.grid.favToggle
-    if ch = invalid then return
+    if ch = invalid or ch.header = true then return
     if m.gridFilter = "favorites=1"
         ' In the Favorites grid * opens the arrange menu instead of unstarring.
         favMoveMenu(ch)
@@ -661,6 +749,20 @@ end sub
 
 function onKeyEvent(key as String, press as Boolean) as Boolean
     if not press then return false
+    ' Channel zap: digit keys (Roku mobile app / remotes that send them) type a
+    ' channel number while watching or in the guide; pausing ~1.6 s tunes it.
+    if m.top.dialog = invalid and Len(key) = 1 and key >= "0" and key <= "9" and (m.video.visible or m.mode = "grid")
+        zapDigit(key)
+        return true
+    end if
+    if m.zapText <> "" and (key = "back" or key = "OK")
+        if key = "OK" then zapCommit()
+        m.zapText = ""
+        m.zapLabel.visible = false
+        m.zapTimer.control = "stop"
+        return true
+    end if
+    if m.nowBar.visible then hideNowBar()
     if m.video.visible
         if key = "back" and m.guideOverlay
             hideGuideOverlay()
@@ -735,10 +837,16 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
         return false
     end if
     if key = "back"
-        if m.top.dialog <> invalid and m.top.dialog.resume = true
-            m.top.dialog.close = true
-            m.top.dialog = invalid
-            focusPane()
+        if m.top.dialog <> invalid
+            ' Any open dialog swallows Back: a plain one just closes, a loading
+            ' ("Tuning..."/"Loading movie...") one also cancels the tune.
+            if m.top.dialog.loading = true
+                stopVideo(false, true)
+            else
+                m.top.dialog.close = true
+                m.top.dialog = invalid
+                focusPane()
+            end if
             return true
         end if
         if m.content.hasFocus() and m.mode = "vodlist"
@@ -861,6 +969,7 @@ sub onSearchEntered(ev as Object)
         q = k.text.trim()
         if q <> ""
             m.lastQuery = q
+            pushSearchHist(q)
             m.mode = "list"
             m.heading.text = "Search: " + q
             m.hint.text = "OK: watch / record   *: favorite"
@@ -869,6 +978,41 @@ sub onSearchEntered(ev as Object)
         end if
     end if
     k.close = true
+end sub
+
+' ---- search history (registry, survives restarts) ----
+
+function loadSearchHist() as Object
+    s = m.reg.read("searches")
+    if s = invalid or s = "" then return []
+    a = ParseJson(s)
+    if type(a) <> "roArray" then return []
+    return a
+end function
+
+sub pushSearchHist(q as String)
+    hist = loadSearchHist()
+    for i = hist.count() - 1 to 0 step -1
+        if LCase(hist[i]) = LCase(q) then hist.delete(i)
+    end for
+    hist.unshift(q)
+    while hist.count() > 8
+        hist.pop()
+    end while
+    m.reg.write("searches", FormatJson(hist))
+    m.reg.flush()
+end sub
+
+' Search tab with no active query: recent searches to re-run, plus a fresh prompt.
+sub showSearchHome()
+    labels = ["New search..."]
+    items = [{ kind: "hist", q: "" }]
+    for each q in loadSearchHist()
+        labels.push("Search again:  " + q)
+        items.push({ kind: "hist", q: q })
+    end for
+    setRows(labels, items, "Press OK to search channels and shows (e.g. ABC, ESPN, Astros).")
+    m.hint.text = "OK: run search   *: remove a saved search"
 end sub
 
 sub loadTeams()
@@ -1254,6 +1398,7 @@ sub applyOverlayTab(idx as Integer)
         else if tabName = "Recent"
             m.mode = "recent"
             renderRecents()
+            api("/recordings", "cw")
             m.content.setFocus(true)
         else if tabName = "Categories"
             m.mode = "categories"
@@ -1417,19 +1562,65 @@ function recentLabel(r as Object) as String
 end function
 
 sub renderRecents()
-    m.items = loadRecents()
     labels = []
-    for each r in m.items
-        labels.push(recentLabel(r))
+    items = []
+    ' Continue Watching first: recordings with a saved position (m.recCache holds
+    ' the last /recordings response), then movies with a resume mark.
+    if m.recCache <> invalid
+        for each rec in m.recCache
+            if rec.status = "done"
+                saved = readResumePos(rec.id)
+                if saved > 5
+                    pct = 0
+                    if rec.duration <> invalid and rec.duration > 0 then pct = Int(saved / rec.duration * 100)
+                    if pct > 100 then pct = 100
+                    labels.push("RESUME   " + txt(rec.title) + "   " + pct.toStr() + "% watched   (" + txt(rec.channel_name) + ")")
+                    items.push({ kind: "rec", id: rec.id, title: txt(rec.title), url: txt(rec.stream_url), pos: saved })
+                end if
+            end if
+        end for
+    end if
+    recents = loadRecents()
+    for each r in recents
+        if r.kind = "movie"
+            saved = readVodPos(r.id)
+            if saved > 5
+                labels.push("RESUME   " + txt(r.name) + "   (movie, " + fmtDuration(saved) + " in)")
+                items.push({ kind: "movie", id: r.id, name: r.name, pos: saved })
+            end if
+        end if
     end for
-    setRows(labels, m.items, "Nothing watched yet. Tune a channel or play a movie and it shows up here.")
+    for each r in recents
+        labels.push(recentLabel(r))
+        items.push(r)
+    end for
+    setRows(labels, items, "Nothing watched yet. Tune a channel or play a movie and it shows up here.")
 end sub
 
 sub removeRecentFocused()
     i = m.content.itemFocused
     if i < 0 or i >= m.items.count() then return
-    m.items.delete(i)
-    m.reg.write("recent", FormatJson(m.items))
+    it = m.items[i]
+    ' * on a RESUME row clears the saved position instead of removing the entry.
+    if it.kind = "rec" and it.pos <> invalid
+        m.reg.delete("pos_" + it.id.toStr())
+        m.reg.flush()
+        renderRecents()
+        toast("Resume point cleared")
+        return
+    end if
+    if it.kind = "movie" and it.pos <> invalid
+        m.reg.delete("vpos_" + it.id.toStr())
+        m.reg.flush()
+        renderRecents()
+        toast("Resume point cleared")
+        return
+    end if
+    recents = loadRecents()
+    for j = recents.count() - 1 to 0 step -1
+        if recents[j].id = it.id and recents[j].kind = it.kind then recents.delete(j)
+    end for
+    m.reg.write("recent", FormatJson(recents))
     m.reg.flush()
     renderRecents()
     toast("Removed")
@@ -1679,6 +1870,71 @@ sub onSleepTimer()
     d.setFocus(true)
 end sub
 
+' ---- channel zap (type a channel number) ----
+
+sub zapDigit(k as String)
+    m.zapText = m.zapText + k
+    if Len(m.zapText) > 4 then m.zapText = Right(m.zapText, 4)
+    m.zapLabel.text = "CH " + m.zapText + "_"
+    m.zapLabel.visible = true
+    m.zapTimer.control = "stop"
+    m.zapTimer.control = "start"
+end sub
+
+sub onZapTimer()
+    zapCommit()
+end sub
+
+sub zapCommit()
+    n = Val(m.zapText)
+    m.zapText = ""
+    m.zapLabel.visible = false
+    m.zapTimer.control = "stop"
+    if n <= 0 then return
+    ' Prefer the guide that's already on screen; fall back to the full channel list.
+    gd = m.grid.data
+    if gd <> invalid and gd.channels <> invalid
+        for each ch in gd.channels
+            if ch.num <> invalid and ch.num = n
+                playChannel(ch)
+                return
+            end if
+        end for
+        toast("No channel " + n.toStr() + " in this view")
+    else
+        m.zapNum = n
+        api("/channels?epg=0", "zapch")
+    end if
+end sub
+
+' ---- now-playing banner (brief overlay shown when a stream starts) ----
+
+sub showNowBar()
+    line = txt(m.playTitle)
+    if m.isLive and m.playChannel <> invalid
+        num = ""
+        if m.playChannel.num <> invalid then num = txt(m.playChannel.num) + "   "
+        line = num + txt(m.playChannel.name) + "   |   " + line
+    end if
+    if m.playStop > 0 then line = line + "   |   ends " + fmtTime(m.playStop)
+    if line = "" then return
+    m.nowBarText.text = line
+    m.nowBar.visible = true
+    m.nowBarText.visible = true
+    m.nowBarTimer.control = "stop"
+    m.nowBarTimer.control = "start"
+end sub
+
+sub hideNowBar()
+    m.nowBar.visible = false
+    m.nowBarText.visible = false
+    m.nowBarTimer.control = "stop"
+end sub
+
+sub onNowBarTimer()
+    hideNowBar()
+end sub
+
 ' During playback the Video node keeps focus: its built-in UI handles OK/FF/RW/play and
 ' shows the seek slider. Up/Down/Back aren't transport keys so they still bubble to
 ' onKeyEvent (Up = guide overlay, Down/OK fallback = controls menu, Back = stop).
@@ -1707,6 +1963,8 @@ sub stopVideo(clearResume = false, release = false)
         end if
     end if
     hideLoading()
+    hideNowBar()
+    m.playStop = 0
     m.readyTimer.control = "stop"
     m.playTimer.control = "stop"
     m.stallTimer.control = "stop"
@@ -1761,6 +2019,7 @@ sub onVideoState()
         m.stallPos = -1
         m.stallTicks = 0
         focusVideo()
+        showNowBar()
         if m.startPos > 0
             m.video.seek = m.startPos
             m.startPos = 0
@@ -1878,6 +2137,8 @@ sub onApiResponse(ev as Object)
             m.streamUrl = r.stream_url
             m.playTitle = txt(m.pendingChannel.name)
             m.playChannel = m.pendingChannel
+            m.playStop = 0
+            if r["stop"] <> invalid then m.playStop = r["stop"]
             m.tsContinuing = (r.continuing = true or r.continuing = 1)
             addRecent({ kind: "channel", id: m.pendingChannel.id, name: txt(m.pendingChannel.name), title: txt(r.title) })
             m.readyAttempts = 0
@@ -1989,6 +2250,9 @@ sub onApiResponse(ev as Object)
         if m.mode = "grid" or m.guideOverlay then loadGrid()
     else if tag = "guide"
         if m.mode <> "grid" and not m.guideOverlay then return
+        ' Insert section headers BEFORE the focusRow lookup so its index lines
+        ' up with the list the grid actually renders (headers shift indices).
+        if r.channels <> invalid then r.channels = withSectionHeaders(r.channels)
         ' After a favorites move, keep the highlight on the channel that moved.
         ' focusRow must be set before grid.data: it has no onChange, and onData
         ' clamps it to the new channel list and renders once.
@@ -2010,8 +2274,8 @@ sub onApiResponse(ev as Object)
         end if
     else if tag = "search" or tag = "channels"
         if m.mode <> "list" then return
-        labels = []
-        items = []
+        labels = ["New search..."]
+        items = [{ kind: "hist", q: "" }]
         chans = r.items
         if chans = invalid then chans = r.channels
         if chans <> invalid
@@ -2073,6 +2337,11 @@ sub onApiResponse(ev as Object)
             items.push(mv)
         end for
         setRows(labels, items, "No movies in this category.")
+    else if tag = "cw"
+        ' Continue Watching: stash the recordings list and re-render Recent so the
+        ' RESUME rows show up (also refreshes the * hint and % watched).
+        m.recCache = r.items
+        if m.mode = "recent" then renderRecents()
     else if tag = "vodinfo"
         ' Details for the highlighted movie. Stale responses (user scrolled on)
         ' are dropped by comparing the returned id to the focused row.
@@ -2140,7 +2409,19 @@ sub onApiResponse(ev as Object)
         end for
         setRows(labels, r.items, "Nothing scheduled.")
     else if tag = "scheduled_ok"
-        toast("Recording scheduled")
+        if txt(r.warning) <> ""
+            ' Overlaps more recordings than the provider has streams - say so now
+            ' instead of silently dropping one at record time.
+            d = CreateObject("roSGNode", "Dialog")
+            d.title = "Recording scheduled"
+            d.message = txt(r.warning)
+            d.buttons = ["OK"]
+            d.observeField("buttonSelected", "onErrorDialog")
+            m.top.dialog = d
+            d.setFocus(true)
+        else
+            toast("Recording scheduled")
+        end if
         if m.mode = "grid" then loadGrid()
     else if tag = "cancel_ok"
         toast("Recording cancelled")
@@ -2200,6 +2481,42 @@ sub onApiResponse(ev as Object)
             m.top.dialog = d
             d.setFocus(true)
         end if
+    else if tag = "health"
+        lines = []
+        lines.push("Uptime: " + fmtDuration(r.uptime_s))
+        lines.push("Channels: " + txt(r.channels) + " enabled / " + txt(r.channels_total) + " total in " + txt(r.groups_enabled) + " groups")
+        lines.push("Guide programs: " + txt(r.programs))
+        if r.disk_free_mb <> invalid then lines.push("Disk free: " + fmtSize(r.disk_free_mb * 1048576))
+        conn = txt(r.conn_in_use)
+        if r.conn_limit <> invalid then conn = conn + "  (provider allows " + txt(r.conn_limit) + ")"
+        lines.push("Provider streams in use: " + conn)
+        n = 0
+        if r.live_sessions <> invalid then n = r.live_sessions.count()
+        lines.push("Live buffers: " + n.toStr() + "   Recording now: " + txt(r.recording_now) + "   Scheduled: " + txt(r.scheduled))
+        lines.push("Playlist imported: " + fmtDay(r.m3u_last) + " " + fmtTime(r.m3u_last))
+        lines.push("Guide updated: " + fmtDay(r.epg_last) + " " + fmtTime(r.epg_last))
+        d = CreateObject("roSGNode", "Dialog")
+        d.title = "Pi server status"
+        msg = ""
+        for each l in lines
+            if msg <> "" then msg = msg + Chr(10)
+            msg = msg + l
+        end for
+        d.message = msg
+        d.buttons = ["OK"]
+        d.observeField("buttonSelected", "onHealthDialog")
+        m.top.dialog = d
+        d.setFocus(true)
+    else if tag = "zapch"
+        ' Channel-zap fallback when the guide grid wasn't loaded yet.
+        found = invalid
+        if r.items <> invalid
+            for each ch in r.items
+                if ch.num <> invalid and ch.num = m.zapNum then found = ch
+                if found <> invalid then exit for
+            end for
+        end if
+        if found <> invalid then playChannel(found) else toast("No channel " + m.zapNum.toStr())
     else if tag = "refresh"
         if r.started = true then toast("Import started on server; it may take a few minutes") else toast("Import already running")
         loadStatus()

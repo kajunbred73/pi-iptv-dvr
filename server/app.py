@@ -41,6 +41,9 @@ def _now():
     return int(time.time())
 
 
+_STARTED = _now()
+
+
 def _base_url():
     return request.url_root.rstrip("/")
 
@@ -172,6 +175,11 @@ def api_status():
         "groups_enabled": db.row("SELECT COUNT(*) c FROM groups WHERE enabled=1")["c"],
         "programs": db.row("SELECT COUNT(*) c FROM programs")["c"],
         "recordings": db.row("SELECT COUNT(*) c FROM recordings")["c"],
+        "recording_now": db.row("SELECT COUNT(*) c FROM recordings WHERE status='recording'")["c"],
+        "scheduled": db.row("SELECT COUNT(*) c FROM schedules WHERE status='scheduled'")["c"],
+        "uptime_s": _now() - _STARTED,
+        "conn_in_use": streamer.recorder.connections_in_use(),
+        "conn_limit": streamer.recorder.max_conn,
         "m3u_last": int(db.get_meta("m3u_last", 0) or 0),
         "epg_last": int(db.get_meta("epg_last", 0) or 0),
         "live_sessions": streamer.live.status(),
@@ -208,8 +216,14 @@ def api_search():
     where, args = _channel_filter()
     like = "%" + q + "%"
 
-    chans = db.rows(f"SELECT * FROM channels {where} AND name LIKE ? ORDER BY favorite DESC, fav_order, num, name LIMIT 40",
-                    args + [like])
+    # Digits also match the channel number so Search doubles as a "go to channel".
+    if q.isdigit():
+        chans = db.rows(f"SELECT * FROM channels {where} AND (name LIKE ? OR num=?) "
+                        "ORDER BY favorite DESC, fav_order, num, name LIMIT 40",
+                        args + [like, int(q)])
+    else:
+        chans = db.rows(f"SELECT * FROM channels {where} AND name LIKE ? ORDER BY favorite DESC, fav_order, num, name LIMIT 40",
+                        args + [like])
     cur, nxt = _now_next_all(now, (c["tvg_id"] for c in chans))
     ch_out = []
     for ch in chans:
@@ -372,7 +386,17 @@ def api_schedule_create():
         return jsonify({"ok": True, "id": dup["id"], "duplicate": True})
     sid = db.execute("INSERT INTO schedules(channel_id,title,start,stop,status,created) VALUES(?,?,?,?,'scheduled',?)",
                      (cid, title, start, stop, now))
-    return jsonify({"ok": True, "id": sid})
+    # Warn when this recording overlaps enough others to exceed the provider's
+    # stream limit - the losing one would fail silently at record time.
+    warn = None
+    limit = streamer.recorder.max_conn
+    if limit:
+        overlap = db.row("SELECT COUNT(*) c FROM schedules WHERE status IN ('scheduled','recording') "
+                         "AND id != ? AND start < ? AND stop > ?", (sid, stop, start))["c"]
+        if overlap + 1 > limit:
+            warn = (f"Scheduled, but this overlaps {overlap} other recording(s) and your provider "
+                    f"only allows {limit} stream(s) at once - one of them will fail.")
+    return jsonify({"ok": True, "id": sid, "warning": warn})
 
 
 @app.post("/api/timeshift")
