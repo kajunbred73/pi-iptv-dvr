@@ -419,10 +419,11 @@ function onReady(r) {
     showMsg("Can't play", "The Pi could not open this channel's stream. ffmpeg said:\n" + txt(r.error));
   } else {
     S.readyAttempts = (S.readyAttempts || 0) + 1;
-    setLoadingProgress(`Buffering live TV... ${r.segments}/3`);
+    // r.warn is ffmpeg's log tail translated - "provider isn't answering" etc.
+    setLoadingProgress(`Buffering live TV... ${r.segments}/3` + (r.warn ? `\n${r.warn}` : ''));
     if (S.readyAttempts > 150) {
       clearInterval(S.readyTimer);
-      showMsg("Can't play", `The Pi is still not producing video after 150 s (${r.segments} segments).`);
+      showMsg("Can't play", `The Pi is still not producing video after 150 s (${r.segments} segments). ${txt(r.warn)}`);
     }
   }
 }
@@ -439,10 +440,10 @@ function onVodReady(r) {
       : 'The movie stream stopped before it produced any video.');
   } else {
     S.readyAttempts = (S.readyAttempts || 0) + 1;
-    setLoadingProgress(`Loading movie... ${r.segments} segments`);
+    setLoadingProgress(`Loading movie... ${r.segments} segments` + (r.warn ? `\n${r.warn}` : ''));
     if (S.readyAttempts > 240) {
       clearInterval(S.readyTimer);
-      showMsg("Can't play", 'The movie still is not ready after 4 minutes.');
+      showMsg("Can't play", 'The movie still is not ready after 4 minutes. ' + txt(r.warn));
     }
   }
 }
@@ -1084,7 +1085,8 @@ function optionsAction() {
 function loadStatus() {
   if (!S.server) return;
   api('/status', r => {
-    $('status').textContent = `${r.channels} channels  |  ${r.recordings} recordings  |  ${S.server}`;
+    const prov = r.provider && r.provider.ok === false ? 'PROVIDER DOWN  |  ' : '';
+    $('status').textContent = `${prov}${r.channels} channels  |  ${r.recordings} recordings  |  ${S.server}`;
   }, 'GET', null);
   if (video.classList.contains('playing')) {
     if (S.isLive && S.recordingId >= 0) api(`/timeshift/${S.recordingId}/touch`, null, 'POST', '');

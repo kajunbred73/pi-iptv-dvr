@@ -2141,6 +2141,9 @@ sub onApiResponse(ev as Object)
         st = txt(r.channels) + " channels  |  " + txt(r.recordings) + " recordings"
         ' Surface disk space - a full card breaks ffmpeg silently otherwise.
         if r.disk_free_mb <> invalid then st = st + "  |  " + fmtSize(r.disk_free_mb * 1048576) + " free"
+        ' Provider probe: when the provider host won't answer, every tune would
+        ' sit at 0 segments - say so up front instead of after the timeout.
+        if r.provider <> invalid and r.provider.ok = false then st = "PROVIDER DOWN  |  " + st
         m.status.text = st + "  |  " + m.server
     else if tag = "timeshift"
         if r.ok = true or r.ok = 1
@@ -2178,10 +2181,11 @@ sub onApiResponse(ev as Object)
                 m.readyAttempts = m.readyAttempts + 1
                 if m.top.dialog <> invalid and m.top.dialog.loading = true
                     m.top.dialog.title = "Loading movie... " + txt(r.segments) + " segments"
+                    m.top.dialog.message = txt(r.warn)
                 end if
                 if m.readyAttempts > 240
                     m.readyTimer.control = "stop"
-                    playError("The movie still is not ready after 4 minutes. The provider may be too slow or the file unavailable.")
+                    playError("The movie still is not ready after 4 minutes. " + txt(r.warn))
                 end if
             end if
             return
@@ -2213,10 +2217,13 @@ sub onApiResponse(ev as Object)
             m.readyAttempts = m.readyAttempts + 1
             if m.top.dialog <> invalid and m.top.dialog.loading = true
                 m.top.dialog.title = "Buffering live TV... " + txt(r.segments) + "/3"
+                ' ffmpeg's log tail, translated: tells you when it's the provider
+                ' that's dead rather than your Pi (e.g. "connection timed out").
+                m.top.dialog.message = txt(r.warn)
             end if
             if m.readyAttempts > 60
                 m.readyTimer.control = "stop"
-                playError("The Pi is still not producing video after 60 s (" + txt(r.segments) + " segments). The provider stream may be down or too slow.")
+                playError("The Pi is still not producing video after 60 s (" + txt(r.segments) + " segments). " + txt(r.warn))
             end if
         end if
     else if tag = "rejoin"
@@ -2504,8 +2511,33 @@ sub onApiResponse(ev as Object)
         n = 0
         if r.live_sessions <> invalid then n = r.live_sessions.count()
         lines.push("Live buffers: " + n.toStr() + "   Recording now: " + txt(r.recording_now) + "   Scheduled: " + txt(r.scheduled))
+        ' Provider probe: is the source host answering the Pi at all?
+        if r.provider <> invalid and r.provider.host <> invalid and r.provider.host <> ""
+            if r.provider.ok = true
+                lines.push("Provider (" + txt(r.provider.host) + "): up, " + txt(r.provider.ms) + " ms")
+            else if r.provider.ok = false
+                lines.push("Provider (" + txt(r.provider.host) + "): NOT answering")
+            else
+                lines.push("Provider (" + txt(r.provider.host) + "): not checked yet")
+            end if
+        end if
         lines.push("Playlist imported: " + fmtDay(r.m3u_last) + " " + fmtTime(r.m3u_last))
         lines.push("Guide updated: " + fmtDay(r.epg_last) + " " + fmtTime(r.epg_last))
+        ' Surface the last import's errors - a failed refresh is why the guide or
+        ' channel list looks stale, and it's invisible otherwise.
+        if r["import"] <> invalid
+            imp = r["import"]
+            if imp.running = true then lines.push("Import: running now (" + txt(imp.step) + ")")
+            res = imp.result
+            if res <> invalid
+                if res.channels <> invalid then lines.push("Last import: " + txt(res.channels) + " channels, " + txt(res.programs) + " programs")
+                for each k in ["channels_error", "programs_error"]
+                    if res[k] <> invalid and txt(res[k]) <> ""
+                        lines.push("Last import " + k + ": " + Left(txt(res[k]), 80))
+                    end if
+                end for
+            end if
+        end if
         d = CreateObject("roSGNode", "Dialog")
         d.title = "Pi server status"
         msg = ""

@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import threading
 import time
 import urllib.request
@@ -157,6 +158,70 @@ def _roku_watch_loop():
 threading.Thread(target=_roku_watch_loop, daemon=True).start()
 
 
+# ------------------------------------------------------ provider health probe
+# A bare TCP connect to the provider host once a minute. When the provider (or
+# the Pi's route to it) dies, ffmpeg just logs "Connection timed out" forever
+# and every client shows "0 segments" - this flag lets clients say so plainly.
+
+_provider_state = {"ok": None, "ms": None, "checked": 0, "host": ""}
+
+
+def _provider_probe():
+    """(ok, ms, host): TCP-connect to the Xtream/M3U host, or (None, None, '') if unconfigured."""
+    base = config.get("xtream_host") or config.get("m3u_url")
+    m = re.match(r"https?://([^/:?]+)(?::(\d+))?", base or "")
+    if not m:
+        return None, None, ""
+    host = m.group(1)
+    port = int(m.group(2) or (443 if base.startswith("https") else 80))
+    t0 = time.time()
+    try:
+        socket.create_connection((host, port), timeout=8).close()
+        return True, int((time.time() - t0) * 1000), host
+    except OSError:
+        return False, None, host
+
+
+def _provider_watch_loop():
+    while True:
+        ok, ms, host = _provider_probe()
+        if host:
+            _provider_state.update(ok=ok, ms=ms, checked=int(time.time()), host=host)
+        time.sleep(60)
+
+
+threading.Thread(target=_provider_watch_loop, daemon=True).start()
+
+
+# ffmpeg writes its stderr to <recording>/ffmpeg.log; when a buffer produces
+# nothing, the tail of that log says why. Map the common signatures to text a
+# viewer can act on instead of a silent "0 segments" wait.
+_FFMPEG_HINTS = [
+    ("Connection timed out", "the provider isn't answering (connection timed out) - still retrying"),
+    ("Connection refused", "the provider refused the connection - still retrying"),
+    ("403 Forbidden", "the provider rejected the stream (403) - account or connection limit?"),
+    ("404 Not Found", "the provider no longer has this stream (404)"),
+    ("Could not resolve", "the Pi can't resolve the provider's name - check DNS/network"),
+]
+
+
+def _ffmpeg_hint(log_path):
+    """Friendly cause for a buffer producing no segments, from ffmpeg.log's tail."""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell() == 0:
+                return ""
+            f.seek(max(0, f.tell() - 8192))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    for pat, msg in _FFMPEG_HINTS:
+        if pat in tail:
+            return msg
+    return ""
+
+
 # ---------------------------------------------------------------- JSON API (used by Roku)
 
 @app.get("/api/status")
@@ -183,6 +248,7 @@ def api_status():
         "m3u_last": int(db.get_meta("m3u_last", 0) or 0),
         "epg_last": int(db.get_meta("epg_last", 0) or 0),
         "live_sessions": streamer.live.status(),
+        "provider": dict(_provider_state),
         "import": playlist.state,
     })
 
@@ -508,12 +574,18 @@ def api_timeshift_ready(rid):
     rec = db.row("SELECT * FROM recordings WHERE id=?", (rid,)) or abort(404)
     segs, ended, dur = streamer.recorder.segments(rid)
     streamer.recorder.touch_timeshift(rid)
+    warn = ""
+    if segs < config.get("timeshift_min_segments") and rec["status"] == "recording":
+        # ffmpeg is alive but producing nothing: the log tail usually says why
+        # (provider timeout, 403, DNS) - surface it instead of a silent wait.
+        warn = _ffmpeg_hint(os.path.join(config.get("recordings_dir"), rec["path"], "ffmpeg.log"))
     return jsonify({
         "ok": True,
         "ready": segs >= config.get("timeshift_min_segments") or (ended and segs > 0),
         "segments": segs,
         "duration": dur,
         "status": rec["status"],
+        "warn": warn,
         "error": streamer.recorder.last_error(rid) if rec["status"] != "recording" else "",
         "stream_url": f"{_base_url()}/recordings/{rid}/index.m3u8",
     })
@@ -642,12 +714,16 @@ def api_vod_ready(vid):
             ended = "#EXT-X-ENDLIST" in open(s.playlist).read()
         except OSError:
             pass
+    warn = ""
+    if segs == 0 and s.alive():
+        warn = _ffmpeg_hint(os.path.join(s.dir, "ffmpeg.log"))
     return jsonify({
         "ok": True,
         "ready": segs > 0,
         "segments": segs,
         "alive": s.alive(),
         "ended": ended,
+        "warn": warn,
         "error": s.last_error() if not s.alive() and not ended else "",
     })
 
