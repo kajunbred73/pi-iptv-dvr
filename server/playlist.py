@@ -151,21 +151,51 @@ def import_m3u(url=None):
         return 0
     if url:
         config.save({"m3u_url": url})
-    source = _xtream_channels() if xtream else _m3u_channels()
+    # Materialize fully before touching the table: a generator that errors halfway
+    # would otherwise DELETE the catalog and then die.
+    source = list(_xtream_channels() if xtream else _m3u_channels())
     c = db.conn()
-    favs = {r["url"]: (r["favorite"], r["fav_order"])
-            for r in db.rows("SELECT url, favorite, fav_order FROM channels")}
-    count = 0
+    prev = db.rows("SELECT url, tvg_id, name, favorite, fav_order FROM channels")
+    if prev and not source:
+        # Provider hiccup/empty reply: keep the existing catalog and its favorites
+        # instead of wiping everything until the next refresh.
+        log.error("channel import returned 0 rows - keeping existing %d", len(prev))
+        return len(prev)
+    if prev and len(source) < len(prev) // 2:
+        log.warning("import shrank catalog %d -> %d", len(prev), len(source))
+    # Providers occasionally rotate stream URLs/ids, so key favorites by url first
+    # and fall back to tvg_id, then normalized name.
+    favs = {}
+    for r in prev:
+        if not r["favorite"]:
+            continue
+        keys = [r["url"]]
+        if r["tvg_id"]:
+            keys.append("tvg:" + r["tvg_id"])
+        keys.append("name:" + (r["name"] or "").strip().lower())
+        for k in keys:
+            favs.setdefault(k, r["fav_order"])
+    count, fav_n = 0, 0
     groups = {}
     c.execute("DELETE FROM channels")
     for i, ch in enumerate(source, 1):
-        fav, forder = favs.get(ch["url"], (0, 0))
+        hit = favs.get(ch["url"])
+        if hit is None and ch["tvg_id"]:
+            hit = favs.get("tvg:" + ch["tvg_id"])
+        if hit is None:
+            hit = favs.get("name:" + (ch["name"] or "").strip().lower())
+        fav = 1 if hit is not None else 0
+        forder = hit or 0
+        fav_n += fav
         c.execute(
             "INSERT INTO channels(num, name, tvg_id, logo, grp, url, favorite, fav_order) VALUES(?,?,?,?,?,?,?,?)",
             (ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"], ch["grp"], ch["url"], fav, forder),
         )
         groups[ch["grp"]] = groups.get(ch["grp"], 0) + 1
         count += 1
+    if fav_n < sum(1 for r in prev if r["favorite"]):
+        log.warning("import dropped %d favorites (URLs/names changed)",
+                    sum(1 for r in prev if r["favorite"]) - fav_n)
     # New groups start enabled only for small playlists; otherwise the user picks in Settings.
     default_on = 1 if count <= 500 else 0
     c.executemany("INSERT OR IGNORE INTO groups(name, enabled) VALUES(?,?)", [(g, default_on) for g in groups])
