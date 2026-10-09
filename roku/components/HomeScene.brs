@@ -860,15 +860,18 @@ sub onSearchEntered(ev as Object)
 end sub
 
 sub loadTeams()
+    ' The Pi is the source of truth (registry is only an offline cache): show the
+    ' cache instantly, then refresh from the server.
     t = m.reg.read("teams")
-    if t = invalid
-        m.teams = []
-    else
-        m.teams = ParseJson(t)
-        if m.teams = invalid or m.teams.count() = invalid
-            m.teams = []
-        end if
+    if t <> invalid and t <> ""
+        parsed = ParseJson(t)
+        if parsed <> invalid then m.teams = parsed
     end if
+    renderTeams()
+    api("/teams", "teams")
+end sub
+
+sub renderTeams()
     labels = ["Add team"]
     items = [{ name: "Add team", action: "add" }]
     for each name in m.teams
@@ -876,6 +879,14 @@ sub loadTeams()
         items.push({ name: name })
     end for
     setRows(labels, items, "No teams yet. Select 'Add team' to create your list.")
+end sub
+
+sub saveTeams()
+    ' Server first (survives dev-key resets/reinstalls), registry as offline cache.
+    m.reg.write("teams", FormatJson(m.teams))
+    m.reg.flush()
+    api("/teams", "teams_save", "POST", FormatJson({ teams: m.teams }))
+    renderTeams()
 end sub
 
 sub promptTeamAdd()
@@ -913,9 +924,7 @@ sub onTeamMenu(ev as Object)
         promptTeamRename(idx)
     else if btn = 2
         m.teams.delete(idx)
-        m.reg.write("teams", FormatJson(m.teams))
-        m.reg.flush()
-        loadTeams()
+        saveTeams()
     end if
 end sub
 
@@ -937,9 +946,7 @@ sub onTeamEntered(ev as Object)
         if name <> ""
             if m.renameIdx >= 0 and m.renameIdx < m.teams.count()
                 m.teams[m.renameIdx] = name
-                m.reg.write("teams", FormatJson(m.teams))
-                m.reg.flush()
-                loadTeams()
+                saveTeams()
             else
                 addTeam(name)
             end if
@@ -955,9 +962,7 @@ sub addTeam(name as String)
         if LCase(t) = LCase(name) then return
     end for
     m.teams.push(name)
-    m.reg.write("teams", FormatJson(m.teams))
-    m.reg.flush()
-    loadTeams()
+    saveTeams()
 end sub
 
 sub deleteTeamFocused()
@@ -967,9 +972,7 @@ sub deleteTeamFocused()
     if it.action = "add" then return
     if m.teams.count() > 0
         m.teams.delete(i - 1)
-        m.reg.write("teams", FormatJson(m.teams))
-        m.reg.flush()
-        loadTeams()
+        saveTeams()
     end if
 end sub
 
@@ -1737,6 +1740,14 @@ end sub
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
     if t.tag = "touch" or t.tag = "vodinfo" or t.tag = "tsstop" or t.tag = "vodstop" then return
+    if t.tag = "teams"
+        renderTeams()   ' offline: show the registry cache
+        return
+    end if
+    if t.tag = "teams_save"
+        toast("Teams saved on this Roku only - the Pi did not answer")
+        return
+    end if
     if t.tag = "timeshift" or t.tag = "readycheck" or t.tag = "rejoin" or t.tag = "vodplay"
         m.readyTimer.control = "stop"
         playError("The Pi did not answer " + t.url + Chr(10) + t.error + Chr(10) + "If this says HTTP 404, the Pi is running old server code: cd pi-iptv-dvr && git pull && sudo systemctl restart pi-iptv-dvr")
@@ -2036,6 +2047,30 @@ sub onApiResponse(ev as Object)
         toast("Recording cancelled")
         if m.mode = "grid" then loadGrid()
         if m.mode = "scheduled" then api("/schedules", "schedules")
+    else if tag = "teams"
+        m.teams = []
+        if r.teams <> invalid
+            for each t in r.teams
+                nm = txt(t)
+                if nm <> "" then m.teams.push(nm)
+            end for
+        end if
+        ' First run after moving storage to the Pi: seed it from the local cache
+        ' rather than losing the existing list.
+        if m.teams.count() = 0
+            cached = m.reg.read("teams")
+            if cached <> invalid and cached <> ""
+                parsed = ParseJson(cached)
+                if parsed <> invalid and parsed.count() > 0
+                    m.teams = parsed
+                    saveTeams()
+                    return
+                end if
+            end if
+        end if
+        m.reg.write("teams", FormatJson(m.teams))
+        m.reg.flush()
+        renderTeams()
     else if tag = "fav_ok"
         if m.mode = "grid" then loadGrid()
         if m.mode = "list" then api("/search?q=" + urlEnc(m.lastQuery), "search")

@@ -432,6 +432,24 @@ def api_timeshift_stop(rid):
     return jsonify({"ok": True, "stopped": streamer.recorder.stop_timeshift(rid)})
 
 
+@app.get("/api/teams")
+def api_teams():
+    """Saved sports-team names for the Sports search tab."""
+    try:
+        teams = json.loads(db.get_meta("teams") or "[]")
+    except Exception:
+        teams = []
+    return jsonify({"ok": True, "teams": teams})
+
+
+@app.post("/api/teams")
+def api_teams_save():
+    body = request.get_json(silent=True) or {}
+    teams = [str(t).strip() for t in (body.get("teams") or []) if str(t).strip()]
+    db.set_meta("teams", json.dumps(teams))
+    return jsonify({"ok": True, "teams": teams})
+
+
 @app.post("/api/timeshift/<int:rid>/touch")
 def api_timeshift_touch(rid):
     """Heartbeat from a viewer; un-touched live buffers are stopped after timeshift_idle_seconds."""
