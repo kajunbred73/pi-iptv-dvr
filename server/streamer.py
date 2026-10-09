@@ -232,8 +232,13 @@ class LiveManager:
                         del self.sessions[cid]
 
     def status(self):
+        # Snapshot under the lock: the reaper mutates self.sessions on another
+        # thread and dict iteration during a resize throws RuntimeError -> the
+        # whole /api/status endpoint 500s and the Roku shows "Cannot reach".
+        with self.lock:
+            items = list(self.sessions.items())
         return [{"channel_id": cid, "name": s.channel["name"], "idle": int(time.time() - s.last_access)}
-                for cid, s in self.sessions.items()]
+                for cid, s in items]
 
 
 live = LiveManager()
@@ -312,10 +317,11 @@ class Recorder:
             log.warning("connection-limit probe failed: %s", e)
 
     def connections_in_use(self):
-        n = len(self.active)
-        n += sum(1 for s in live.sessions.values() if s.alive())
-        n += sum(1 for s in vod.sessions.values() if s.alive())
-        return n
+        with live.lock:
+            live_n = sum(1 for s in live.sessions.values() if s.alive())
+        with vod.lock:
+            vod_n = sum(1 for s in vod.sessions.values() if s.alive())
+        return len(self.active) + live_n + vod_n
 
     def connection_limit_hit(self):
         return bool(self.max_conn) and self.connections_in_use() >= self.max_conn

@@ -225,6 +225,11 @@ sub api(path as String, tag as String, method = "GET" as String, body = "" as St
     ' channel flip - the older answer would retune the channel you left).
     old = m.tasks[tag]
     if old <> invalid then
+        ' Timer-driven polls are the exception: killing the in-flight request every
+        ' second means no answer ever lands when the Pi is busy - the ready check
+        ' would spin forever and its timeout (which counts responses) never trips.
+        ' Skipping this tick is safe: the pending request carries the same query.
+        if tag = "readycheck" or tag = "rejoin" or tag = "touch" or tag = "status" then return
         old.control = "stop"
         m.tasks.delete(tag)
     end if
@@ -2029,7 +2034,10 @@ sub onVideoState()
         m.autoRetunes = 0
     else if st = "error"
         if m.video.position <> invalid and m.video.position > 4 then m.finishPos = m.video.position
-        if m.recordingId >= 0 and m.isLive and m.retryCount < 5 and not m.retrying
+        if m.retrying and m.isLive
+            ' A recovery is already armed (stall watchdog or a previous state change);
+            ' this is the same failure surfacing again, not a new one.
+        else if m.recordingId >= 0 and m.isLive and m.retryCount < 5
             m.retrying = true
             m.retryCount = m.retryCount + 1
             m.retryTimer.control = "start"
@@ -2039,7 +2047,10 @@ sub onVideoState()
     else if st = "finished"
         ' A live buffer only really ends when the Pi writes ENDLIST; if the player ran off the
         ' end of the growing playlist, rejoin once the buffer has grown instead of stopping.
-        if m.recordingId >= 0 and m.isLive and m.retryCount < 30 and not m.retrying
+        if m.retrying and m.isLive
+            ' The stall watchdog already armed a retry for this same stall - a second
+            ' "finished" arriving in that window must not count as a fatal end.
+        else if m.recordingId >= 0 and m.isLive and m.retryCount < 30
             m.retrying = true
             m.retryCount = m.retryCount + 1
             if m.video.position <> invalid then m.finishPos = m.video.position
