@@ -154,8 +154,16 @@ def import_m3u(url=None):
     # Materialize fully before touching the table: a generator that errors halfway
     # would otherwise DELETE the catalog and then die.
     source = list(_xtream_channels() if xtream else _m3u_channels())
+    # Same for movies: fetch before opening the write transaction so a failed
+    # download leaves the existing vod table untouched.
+    vod_list = None
+    if xtream:
+        try:
+            vod_list = list(_xtream_vod())
+        except Exception:
+            log.exception("vod fetch failed - keeping existing movie catalog")
     c = db.conn()
-    prev = db.rows("SELECT url, tvg_id, name, favorite, fav_order FROM channels")
+    prev = db.rows("SELECT id, url, tvg_id, name, favorite, fav_order FROM channels")
     if prev and not source:
         # Provider hiccup/empty reply: keep the existing catalog and its favorites
         # instead of wiping everything until the next refresh.
@@ -175,45 +183,70 @@ def import_m3u(url=None):
         keys.append("name:" + (r["name"] or "").strip().lower())
         for k in keys:
             favs.setdefault(k, r["fav_order"])
+    # Channel ids must stay stable across reimports: schedules.channel_id and
+    # recordings.channel_id reference them. Claim the old row's id through the
+    # same url/tvg_id/name matching so a DELETE+INSERT can't silently re-point a
+    # scheduled recording at a different channel.
+    old_ids = {}
+    for r in prev:
+        keys = [r["url"]]
+        if r["tvg_id"]:
+            keys.append("tvg:" + r["tvg_id"])
+        keys.append("name:" + (r["name"] or "").strip().lower())
+        for k in keys:
+            old_ids.setdefault(k, r["id"])
+    used_ids = set()
     count, fav_n = 0, 0
     groups = {}
-    c.execute("DELETE FROM channels")
-    for i, ch in enumerate(source, 1):
-        hit = favs.get(ch["url"])
-        if hit is None and ch["tvg_id"]:
-            hit = favs.get("tvg:" + ch["tvg_id"])
-        if hit is None:
-            hit = favs.get("name:" + (ch["name"] or "").strip().lower())
-        fav = 1 if hit is not None else 0
-        forder = hit or 0
-        fav_n += fav
-        c.execute(
-            "INSERT INTO channels(num, name, tvg_id, logo, grp, url, favorite, fav_order) VALUES(?,?,?,?,?,?,?,?)",
-            (ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"], ch["grp"], ch["url"], fav, forder),
-        )
-        groups[ch["grp"]] = groups.get(ch["grp"], 0) + 1
-        count += 1
-    if fav_n < sum(1 for r in prev if r["favorite"]):
-        log.warning("import dropped %d favorites (URLs/names changed)",
-                    sum(1 for r in prev if r["favorite"]) - fav_n)
-    # New groups start enabled only for small playlists; otherwise the user picks in Settings.
-    default_on = 1 if count <= 500 else 0
-    c.executemany("INSERT OR IGNORE INTO groups(name, enabled) VALUES(?,?)", [(g, default_on) for g in groups])
-    c.executemany("UPDATE groups SET count=? WHERE name=?", [(n, g) for g, n in groups.items()])
-    if groups:
-        c.execute("DELETE FROM groups WHERE name NOT IN (%s)" % ",".join("?" * len(groups)), list(groups))
-    if xtream:
-        try:
+    try:
+        c.execute("DELETE FROM channels")
+        for i, ch in enumerate(source, 1):
+            hit = favs.get(ch["url"])
+            if hit is None and ch["tvg_id"]:
+                hit = favs.get("tvg:" + ch["tvg_id"])
+            if hit is None:
+                hit = favs.get("name:" + (ch["name"] or "").strip().lower())
+            fav = 1 if hit is not None else 0
+            forder = hit or 0
+            fav_n += fav
+            cid = old_ids.get(ch["url"])
+            if cid is None and ch["tvg_id"]:
+                cid = old_ids.get("tvg:" + ch["tvg_id"])
+            if cid is None:
+                cid = old_ids.get("name:" + (ch["name"] or "").strip().lower())
+            if cid in used_ids:
+                cid = None
+            if cid is not None:
+                used_ids.add(cid)
+                c.execute(
+                    "INSERT INTO channels(id, num, name, tvg_id, logo, grp, url, favorite, fav_order) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (cid, ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"], ch["grp"], ch["url"], fav, forder),
+                )
+            else:
+                c.execute(
+                    "INSERT INTO channels(num, name, tvg_id, logo, grp, url, favorite, fav_order) VALUES(?,?,?,?,?,?,?,?)",
+                    (ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"], ch["grp"], ch["url"], fav, forder),
+                )
+            groups[ch["grp"]] = groups.get(ch["grp"], 0) + 1
+            count += 1
+        # New groups start enabled only for small playlists; otherwise the user picks in Settings.
+        default_on = 1 if count <= 500 else 0
+        c.executemany("INSERT OR IGNORE INTO groups(name, enabled) VALUES(?,?)", [(g, default_on) for g in groups])
+        c.executemany("UPDATE groups SET count=? WHERE name=?", [(n, g) for g, n in groups.items()])
+        if groups:
+            c.execute("DELETE FROM groups WHERE name NOT IN (%s)" % ",".join("?" * len(groups)), list(groups))
+        if vod_list is not None:
             c.execute("DELETE FROM vod")
-            vod_n = 0
-            for mv in _xtream_vod():
+            for mv in vod_list:
                 c.execute("INSERT INTO vod(vod_id, name, logo, grp, ext, url) VALUES(?,?,?,?,?,?)",
                           (mv["vod_id"], mv["name"], mv["logo"], mv["grp"], mv["ext"], mv["url"]))
-                vod_n += 1
-            log.info("imported %d movies", vod_n)
-        except Exception:
-            log.exception("vod import failed")
-    c.commit()
+        c.commit()
+    except Exception:
+        # Roll back the half-written catalog; the previous tables stay intact.
+        c.rollback()
+        raise
+    if vod_list is not None:
+        log.info("imported %d movies", len(vod_list))
     db.set_meta("m3u_last", int(time.time()))
     log.info("imported %d live channels in %d groups", count, len(groups))
     return count
@@ -248,11 +281,12 @@ def import_epg(url=None, max_days=3):
         return 0
     now = int(time.time())
     cutoff_lo, cutoff_hi = now - 6 * 3600, now + max_days * 86400
-    count = 0
     c = db.conn()
-    c.execute("DELETE FROM programs")
-    batch = []
+    rows = []
     root = None
+    # Buffer all rows first: holding the write transaction open for the whole
+    # parse (which can take minutes on a big guide) blocks every other writer -
+    # the scheduler tick and API favorite toggles all hit "database is locked".
     with _open_maybe_gzip(path) as fh:
         for event, el in ET.iterparse(fh, events=("start", "end")):
             if event == "start":
@@ -267,24 +301,32 @@ def import_epg(url=None, max_days=3):
             if not wanted or ch in wanted:
                 start, stop = _xmltv_time(el.get("start", "")), _xmltv_time(el.get("stop", ""))
                 if start and stop and stop > cutoff_lo and start < cutoff_hi:
-                    batch.append((
+                    rows.append((
                         ch, start, stop,
                         (el.findtext("title") or "").strip(),
                         (el.findtext("desc") or "").strip()[:1000],
                         (el.findtext("category") or "").strip(),
                     ))
-                    count += 1
             el.clear()
-            if len(batch) >= 2000:
-                c.executemany("INSERT INTO programs(tvg_id,start,stop,title,description,category) VALUES(?,?,?,?,?,?)", batch)
-                batch = []
+            if len(rows) >= 2000:
                 root.clear()
-    if batch:
-        c.executemany("INSERT INTO programs(tvg_id,start,stop,title,description,category) VALUES(?,?,?,?,?,?)", batch)
-    c.commit()
+    if not rows:
+        # Provider hiccup/empty guide: keep the existing table instead of wiping
+        # every program until the next refresh.
+        log.error("epg import returned 0 programs - keeping existing guide")
+        return 0
+    try:
+        c.execute("DELETE FROM programs")
+        for i in range(0, len(rows), 2000):
+            c.executemany("INSERT INTO programs(tvg_id,start,stop,title,description,category) VALUES(?,?,?,?,?,?)",
+                          rows[i:i + 2000])
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
     db.set_meta("epg_last", int(time.time()))
-    log.info("imported %d programs", count)
-    return count
+    log.info("imported %d programs", len(rows))
+    return len(rows)
 
 
 # ---------------------------------------------------------------- orchestration

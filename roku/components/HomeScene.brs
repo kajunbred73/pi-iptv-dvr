@@ -42,6 +42,8 @@ sub init()
     m.grid.observeField("detail", "onGridDetail")
     m.video.observeField("state", "onVideoState")
     m.statusTimer.observeField("fire", "loadStatus")
+    m.sleepTimer = m.top.findNode("sleepTimer")
+    m.sleepTimer.observeField("fire", "onSleepTimer")
 
     m.items = []          ' data rows backing the content list
     m.mode = "grid"       ' grid | list | categories | recordings | scheduled | settings
@@ -79,6 +81,8 @@ sub init()
     m.rejoinPos = -1
     m.autoRetunes = 0
     m.playChannel = invalid
+    m.lastChannel = invalid
+    m.sleepUntil = 0
     m.finishPos = 0
     m.lastErr = ""
     m.lastSegs = 0
@@ -204,6 +208,14 @@ function urlEnc(s as String) as String
 end function
 
 sub api(path as String, tag as String, method = "GET" as String, body = "" as String)
+    ' A newer call for the same tag supersedes the old one: stop it so a late
+    ' response can't overwrite fresher state (e.g. two timeshift POSTs on a fast
+    ' channel flip - the older answer would retune the channel you left).
+    old = m.tasks[tag]
+    if old <> invalid then
+        old.control = "stop"
+        m.tasks.delete(tag)
+    end if
     t = CreateObject("roSGNode", "ApiTask")
     t.url = m.server + "/api" + path
     t.method = method
@@ -1506,6 +1518,8 @@ sub playChannel(ch as Object)
     ' The buffer itself is released server-side by the /timeshift call (it keeps
     ' rolling only when the provider's connection limit allows it).
     if m.video.visible then stopVideo()
+    ' Remember where we came from so the trick menu can offer a quick flip back.
+    if m.playChannel <> invalid and m.playChannel.id <> ch.id then m.lastChannel = m.playChannel
     m.pendingChannel = ch
     m.recordingId = -1
     m.tsContinuing = false
@@ -1538,12 +1552,21 @@ sub trickMenu()
             buttons = ["Pause", "Back 30s", "Forward 30s"]
             actions = ["pause", "back30", "fwd30"]
         end if
-    else if m.video.state = "paused"
-        buttons = ["Play", "Back 30s", "Forward 30s", "Jump to live", "Keep recording"]
-        actions = ["play", "back30", "fwd30", "live", "keep"]
     else
-        buttons = ["Pause", "Back 30s", "Forward 30s", "Jump to live", "Keep recording"]
-        actions = ["pause", "back30", "fwd30", "live", "keep"]
+        ' Recorded playback has no live edge to jump to and nothing to keep.
+        if m.video.state = "paused"
+            buttons = ["Play", "Back 30s", "Forward 30s"]
+            actions = ["play", "back30", "fwd30"]
+        else
+            buttons = ["Pause", "Back 30s", "Forward 30s"]
+            actions = ["pause", "back30", "fwd30"]
+        end if
+        if m.isLive
+            buttons.push("Jump to live")
+            actions.push("live")
+            buttons.push("Keep recording")
+            actions.push("keep")
+        end if
     end if
     if m.isLive and m.playChannel <> invalid
         if m.playChannel.favorite = 1
@@ -1552,7 +1575,18 @@ sub trickMenu()
             buttons.push("Add to Favorites")
         end if
         actions.push("fav")
+        ' Quick-flip back to the channel we just left (buffer may still be rolling).
+        if m.lastChannel <> invalid and m.lastChannel.id <> m.playChannel.id
+            buttons.push("Last channel: " + txt(m.lastChannel.name))
+            actions.push("lastch")
+        end if
     end if
+    if m.vodId < 0
+        buttons.push("Start over")
+        actions.push("startover")
+    end if
+    buttons.push("Sleep timer...")
+    actions.push("sleep")
     d.buttons = buttons
     d.addField("actions", "array", false)
     d.addField("recordingId", "integer", false)
@@ -1587,8 +1621,62 @@ sub onTrickMenu(ev as Object)
         end if
     else if action = "fav"
         if m.playChannel <> invalid then toggleFavorite(m.playChannel)
+    else if action = "startover"
+        m.video.seek = 0
+    else if action = "lastch"
+        if m.lastChannel <> invalid then playChannel(m.lastChannel)
+        return
+    else if action = "sleep"
+        sleepMenu()
+        return
     end if
     focusVideo()
+end sub
+
+sub sleepMenu()
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = "Sleep timer"
+    if m.sleepUntil > 0
+        left = Int((m.sleepUntil - CreateObject("roDateTime").AsSeconds()) / 60) + 1
+        d.message = "Playback stops in about " + left.toStr() + " minute(s)."
+    else
+        d.message = "Stop playback automatically after:"
+    end if
+    d.buttons = ["15 minutes", "30 minutes", "60 minutes", "90 minutes", "Off"]
+    d.observeField("buttonSelected", "onSleepMenu")
+    m.top.dialog = d
+    d.setFocus(true)
+end sub
+
+sub onSleepMenu(ev as Object)
+    d = ev.getRoSGNode()
+    d.close = true
+    m.top.dialog = invalid
+    idx = ev.getData()
+    mins = [15, 30, 60, 90, 0]
+    if idx < 0 or idx >= mins.count() then idx = mins.count() - 1
+    if mins[idx] > 0
+        m.sleepUntil = CreateObject("roDateTime").AsSeconds() + mins[idx] * 60
+        m.sleepTimer.duration = mins[idx] * 60
+        m.sleepTimer.control = "start"
+    else
+        m.sleepUntil = 0
+        m.sleepTimer.control = "stop"
+    end if
+    focusVideo()
+end sub
+
+sub onSleepTimer()
+    m.sleepUntil = 0
+    if not m.video.visible then return
+    stopVideo(false, true)
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = "Sleep timer"
+    d.message = "Playback stopped."
+    d.buttons = ["OK"]
+    d.observeField("buttonSelected", "onErrorDialog")
+    m.top.dialog = d
+    d.setFocus(true)
 end sub
 
 ' During playback the Video node keeps focus: its built-in UI handles OK/FF/RW/play and
@@ -1739,6 +1827,9 @@ end sub
 
 sub onApiError(ev as Object)
     t = ev.getRoSGNode()
+    ' Drop errors from a superseded request and free the finished task node.
+    if m.tasks[t.tag] = invalid or not m.tasks[t.tag].isSameNode(t) then return
+    m.tasks.delete(t.tag)
     if t.tag = "touch" or t.tag = "vodinfo" or t.tag = "tsstop" or t.tag = "vodstop" then return
     if t.tag = "teams"
         renderTeams()   ' offline: show the registry cache
@@ -1768,11 +1859,19 @@ sub onApiError(ev as Object)
 end sub
 
 sub onApiResponse(ev as Object)
+    t = ev.getRoSGNode()
+    ' Drop responses from a superseded request (same tag re-issued while this one
+    ' was in flight) and free the finished task node.
+    if m.tasks[t.tag] = invalid or not m.tasks[t.tag].isSameNode(t) then return
+    m.tasks.delete(t.tag)
     r = ev.getData()
     tag = r.tag
     if tag = "status"
         m.statusTimer.duration = 30
-        m.status.text = txt(r.channels) + " channels  |  " + txt(r.recordings) + " recordings  |  " + m.server
+        st = txt(r.channels) + " channels  |  " + txt(r.recordings) + " recordings"
+        ' Surface disk space - a full card breaks ffmpeg silently otherwise.
+        if r.disk_free_mb <> invalid then st = st + "  |  " + fmtSize(r.disk_free_mb * 1048576) + " free"
+        m.status.text = st + "  |  " + m.server
     else if tag = "timeshift"
         if r.ok = true or r.ok = 1
             m.recordingId = r.recording_id

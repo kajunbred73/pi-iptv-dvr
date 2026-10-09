@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 import time
 import urllib.request
@@ -76,13 +77,22 @@ def _now_next(tvg_id, now):
     return cur, nxt
 
 
-def _now_next_all(now):
-    """{tvg_id: (current, next)} for every channel in two queries."""
+def _now_next_all(now, tvg_ids=None):
+    """{tvg_id: (current, next)} in two queries, optionally limited to tvg_ids.
+    Without the filter these queries scan every program in the table on every
+    /api/channels call, which gets slow on big catalogs."""
+    id_filter, args = "", []
+    if tvg_ids is not None:
+        ids = sorted({t for t in tvg_ids if t})
+        if not ids:
+            return {}, {}
+        id_filter = f" AND tvg_id IN ({','.join('?' * len(ids))})"
+        args = ids
     cur = {p["tvg_id"]: p for p in db.rows(
-        "SELECT * FROM programs WHERE start<=? AND stop>?", (now, now))}
+        f"SELECT * FROM programs WHERE start<=? AND stop>?{id_filter}", [now, now] + args)}
     nxt = {p["tvg_id"]: p for p in db.rows(
-        "SELECT p.* FROM programs p JOIN (SELECT tvg_id, MIN(start) s FROM programs WHERE start>? GROUP BY tvg_id) m "
-        "ON m.tvg_id=p.tvg_id AND m.s=p.start", (now,))}
+        f"SELECT p.* FROM programs p JOIN (SELECT tvg_id, MIN(start) s FROM programs WHERE start>?{id_filter} "
+        "GROUP BY tvg_id) m ON m.tvg_id=p.tvg_id AND m.s=p.start", [now] + args)}
     return cur, nxt
 
 
@@ -148,10 +158,15 @@ threading.Thread(target=_roku_watch_loop, daemon=True).start()
 
 @app.get("/api/status")
 def api_status():
+    try:
+        free_mb = shutil.disk_usage(config.get("recordings_dir")).free // (1024 * 1024)
+    except OSError:
+        free_mb = None
     return jsonify({
         "ok": True,
         "name": "pi-iptv-dvr",
         "time": _now(),
+        "disk_free_mb": free_mb,
         "channels": db.row(f"SELECT COUNT(*) c FROM channels {_ENABLED}")["c"],
         "channels_total": db.row("SELECT COUNT(*) c FROM channels")["c"],
         "groups_enabled": db.row("SELECT COUNT(*) c FROM groups WHERE enabled=1")["c"],
@@ -170,9 +185,10 @@ def api_channels():
     where, args = _channel_filter()
     q = f"SELECT * FROM channels {where} ORDER BY favorite DESC, fav_order, num, name"
     with_epg = request.args.get("epg", "1") != "0"
-    cur, nxt = _now_next_all(now) if with_epg else ({}, {})
+    chans = db.rows(q, args)
+    cur, nxt = _now_next_all(now, (c["tvg_id"] for c in chans)) if with_epg else ({}, {})
     out = []
-    for ch in db.rows(q, args):
+    for ch in chans:
         cj = _channel_json(ch)
         if with_epg:
             cj["now"] = cur.get(ch["tvg_id"])
@@ -194,7 +210,7 @@ def api_search():
 
     chans = db.rows(f"SELECT * FROM channels {where} AND name LIKE ? ORDER BY favorite DESC, fav_order, num, name LIMIT 40",
                     args + [like])
-    cur, nxt = _now_next_all(now)
+    cur, nxt = _now_next_all(now, (c["tvg_id"] for c in chans))
     ch_out = []
     for ch in chans:
         cj = _channel_json(ch)
@@ -301,12 +317,17 @@ def api_guide():
     end = start + hours * 3600
     where, args = _channel_filter()
     chans = db.rows(f"SELECT * FROM channels {where} ORDER BY favorite DESC, fav_order, num, name", args)
-    ids = {c["tvg_id"] for c in chans if c["tvg_id"]}
+    ids = sorted({c["tvg_id"] for c in chans if c["tvg_id"]})
     progs = {}
-    if ids:
-        for p in db.rows("SELECT tvg_id,start,stop,title,description FROM programs WHERE stop>? AND start<? ORDER BY start", (start, end)):
-            if p["tvg_id"] in ids:
-                progs.setdefault(p["tvg_id"], []).append(p)
+    # Filter in SQL (chunked under SQLite's 999-var limit) — pulling every program
+    # in the window and filtering in Python gets slow on big catalogs.
+    for i in range(0, len(ids), 500):
+        marks = ",".join("?" * len(ids[i:i + 500]))
+        for p in db.rows(
+                f"SELECT tvg_id,start,stop,title,description FROM programs "
+                f"WHERE tvg_id IN ({marks}) AND stop>? AND start<? ORDER BY start",
+                ids[i:i + 500] + [start, end]):
+            progs.setdefault(p["tvg_id"], []).append(p)
     scheduled = {(s["channel_id"], s["start"]) for s in db.rows(
         "SELECT channel_id, start FROM schedules WHERE status IN ('scheduled','recording')")}
     out = []
@@ -636,8 +657,9 @@ def api_recordings():
     for r in db.rows("SELECT * FROM recordings ORDER BY start DESC"):
         r["stream_url"] = f"{_base_url()}/recordings/{r['id']}/index.m3u8"
         # Show timeshift buffers under the show name; the prefix stays in the DB for detection.
+        r["title"] = r["title"] or ""
         if r["title"].startswith("[timeshift]"):
-            r["title"] = r["title"][len("[timeshift]") :].lstrip()
+            r["title"] = r["title"][len("[timeshift]"):].lstrip()
         if r["status"] == "recording":
             r["duration"] = now - r["start"]
         else:

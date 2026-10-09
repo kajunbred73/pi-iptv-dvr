@@ -30,5 +30,6 @@
     <Timer id="stallTimer" repeat="true" duration="5" />
     <Timer id="vodInfoTimer" repeat="false" duration="0.6" />
     <Timer id="statusTimer" repeat="true" duration="30" />
+    <Timer id="sleepTimer" repeat="false" duration="3600" />
   </children>
 </component>
