@@ -2140,7 +2140,8 @@ sub onApiResponse(ev as Object)
         m.statusTimer.duration = 30
         st = txt(r.channels) + " channels  |  " + txt(r.recordings) + " recordings"
         ' Surface disk space - a full card breaks ffmpeg silently otherwise.
-        if r.disk_free_mb <> invalid then st = st + "  |  " + fmtSize(r.disk_free_mb * 1048576) + " free"
+        ' 1048576.0 forces double math: MB*1048576 overflows int32 (>19 GB wraps negative).
+        if r.disk_free_mb <> invalid then st = st + "  |  " + fmtSize(r.disk_free_mb * 1048576.0) + " free"
         ' Provider probe: when the provider host won't answer, every tune would
         ' sit at 0 segments - say so up front instead of after the timeout.
         if r.provider <> invalid and r.provider.ok = false then st = "PROVIDER DOWN  |  " + st
@@ -2504,7 +2505,7 @@ sub onApiResponse(ev as Object)
         lines.push("Uptime: " + fmtDuration(r.uptime_s))
         lines.push("Channels: " + txt(r.channels) + " enabled / " + txt(r.channels_total) + " total in " + txt(r.groups_enabled) + " groups")
         lines.push("Guide programs: " + txt(r.programs))
-        if r.disk_free_mb <> invalid then lines.push("Disk free: " + fmtSize(r.disk_free_mb * 1048576))
+        if r.disk_free_mb <> invalid then lines.push("Disk free: " + fmtSize(r.disk_free_mb * 1048576.0))
         conn = txt(r.conn_in_use)
         if r.conn_limit <> invalid then conn = conn + "  (provider allows " + txt(r.conn_limit) + ")"
         lines.push("Provider streams in use: " + conn)
