@@ -760,7 +760,8 @@ def api_recordings():
         r["stream_url"] = f"{_base_url()}/recordings/{r['id']}/index.m3u8"
         # Show timeshift buffers under the show name; the prefix stays in the DB for detection.
         r["title"] = r["title"] or ""
-        if r["title"].startswith("[timeshift]"):
+        r["timeshift"] = r["title"].startswith("[timeshift]")
+        if r["timeshift"]:
             r["title"] = r["title"][len("[timeshift]"):].lstrip()
         if r["status"] == "recording":
             r["duration"] = now - r["start"]
