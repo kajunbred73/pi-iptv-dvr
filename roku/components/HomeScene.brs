@@ -110,6 +110,9 @@ sub init()
     m.resumePos = 0
 
     m.reg = CreateObject("roRegistrySection", "piiptv")
+    m.appBuild = "?"
+    ai = CreateObject("roAppInfo")
+    if ai <> invalid then m.appBuild = ai.GetValue("build_version")
     m.server = ""
     if m.reg.exists("server") then m.server = m.reg.read("server")
 
@@ -2182,8 +2185,9 @@ sub onApiResponse(ev as Object)
         ' sit at 0 segments - say so up front instead of after the timeout.
         if r.provider <> invalid and r.provider.ok = false then st = "PROVIDER DOWN  |  " + st
         ' Build tag so we can tell at a glance whether the sideloaded update took.
-        ai = CreateObject("roAppInfo")
-        m.status.text = st + "  |  " + m.server + "  |  b" + txt(ai.GetBuildVersion())
+        ' GetValue reads the manifest key - older firmware lacks GetBuildVersion()
+        ' and a missing method inside this callback freezes the whole scene.
+        m.status.text = st + "  |  " + m.server + "  |  b" + txt(m.appBuild)
     else if tag = "timeshift"
         if r.ok = true or r.ok = 1
             m.recordingId = r.recording_id
