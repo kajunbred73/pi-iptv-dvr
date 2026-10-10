@@ -830,7 +830,8 @@ class VodSession:
     def vcodec(self):
         """'hevc'/'h264'/... from the first segment's PMT. Lets the client say
         'your device can't decode HEVC' instead of silently failing to play."""
-        if self._vcodec is None:
+        if not self._vcodec:
+            # Don't cache a miss: the first segment may not have its PMT written yet.
             self._vcodec = _ts_vcodec(os.path.join(self.dir, "seg00000.ts"))
         return self._vcodec
 
