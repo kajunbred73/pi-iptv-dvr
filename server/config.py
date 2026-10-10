@@ -32,7 +32,7 @@ DEFAULTS = {
     "audio_delay_ms": 0,             # lip-sync trim: + delays audio, - delays video (ms)
     "audio_mode": "auto",            # auto: copy AAC-LC/HE-AAC audio, re-encode the rest
                                      # copy: never re-encode | aac: always re-encode
-    "roku_ip": "",                   # Roku's IP - enables autolaunch of the app on Roku reboot
+    "roku_ip": "",                   # Roku IP(s), comma-separated - autolaunch the app when one boots
 }
 
 _lock = threading.Lock()

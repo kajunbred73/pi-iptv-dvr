@@ -114,44 +114,51 @@ threading.Thread(target=_refresh_loop, daemon=True).start()
 def _roku_launch(ip, why):
     try:
         urllib.request.urlopen(f"http://{ip}:8060/launch/dev", data=b"", timeout=3)
-        log.info("Roku autolaunch fired (%s)", why)
+        log.info("Roku autolaunch fired on %s (%s)", ip, why)
         return True
     except Exception as e:
-        log.warning("Roku autolaunch failed: %s", e)
+        log.warning("Roku autolaunch failed on %s: %s", ip, e)
         return False
 
 
+def _roku_ips():
+    """roku_ip may list several Rokus: "192.168.1.50, 192.168.1.94"."""
+    return [ip for ip in re.split(r"[,\s]+", config.get("roku_ip") or "") if ip]
+
+
+def _roku_check(ip, st):
+    """One poll of one Roku. st = {"launched": bool, "down_since": float|None}."""
+    try:
+        with urllib.request.urlopen(f"http://{ip}:8060/query/device-info",
+                                    timeout=3) as r:
+            data = r.read()
+        m = re.search(rb"<uptime>(\d+)</uptime>", data)
+        up = int(m.group(1)) if m else None
+        down_since = st["down_since"]
+        booted = (up is not None and up < 120) or \
+                 (down_since is not None and time.time() - down_since > 60)
+        if booted and not st["launched"]:
+            why = f"uptime={up}s" if up is not None and up < 120 else \
+                  f"back online after {int(time.time() - down_since)}s"
+            st["launched"] = _roku_launch(ip, why)
+        elif up is not None and up >= 300 and down_since is None:
+            st["launched"] = False
+        st["down_since"] = None
+    except Exception:
+        if st["down_since"] is None:
+            st["down_since"] = time.time()
+        st["launched"] = False
+
+
 def _roku_watch_loop():
-    """Autolaunch the sideloaded app when the Roku (re)boots or powers on.
+    """Autolaunch the sideloaded app when a Roku (re)boots or powers on.
     Two signals: device-info uptime near zero (restart), or the box coming back
     online after >60s unreachable (Rokus powered from a TV USB port go fully
     offline when the TV is off)."""
-    launched_this_boot = False
-    down_since = None
+    state = {}
     while True:
-        ip = config.get("roku_ip")
-        if not ip:
-            time.sleep(15)
-            continue
-        try:
-            with urllib.request.urlopen(f"http://{ip}:8060/query/device-info",
-                                        timeout=3) as r:
-                data = r.read()
-            m = re.search(rb"<uptime>(\d+)</uptime>", data)
-            up = int(m.group(1)) if m else None
-            booted = (up is not None and up < 120) or \
-                     (down_since is not None and time.time() - down_since > 60)
-            if booted and not launched_this_boot:
-                why = f"uptime={up}s" if up is not None and up < 120 else \
-                      f"back online after {int(time.time() - down_since)}s"
-                launched_this_boot = _roku_launch(ip, why)
-            elif up is not None and up >= 300 and down_since is None:
-                launched_this_boot = False
-            down_since = None
-        except Exception:
-            if down_since is None:
-                down_since = time.time()
-            launched_this_boot = False
+        for ip in _roku_ips():
+            _roku_check(ip, state.setdefault(ip, {"launched": False, "down_since": None}))
         time.sleep(15)
 
 
