@@ -365,7 +365,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Server status and health", "Refresh playlist and guide on server", "Clear all movie resume marks", "Restart the Pi server", "Version 1.1 build 38"], ["server", "health", "refresh", "vodclear", "restart", "version"])
+    setRows(["Server address: " + m.server, "Server status and health", "Refresh playlist and guide on server", "Clear all movie resume marks", "Restart the Pi server", "Version 1.1 build " + txt(m.appBuild)], ["server", "health", "refresh", "vodclear", "restart", "version"])
 end sub
 
 sub onHealthDialog(ev as Object)
@@ -485,6 +485,7 @@ sub onContentSelected()
             selectVodItem(it)
         else if it.kind = "rec"
             ' Continue Watching row: jump straight into the resume dialog.
+            if m.video.visible then stopVideo(false, true)
             m.recordingId = it.id
             showResumeDialog(it.url, it.title, false, it.pos, it.id)
         else
@@ -497,6 +498,7 @@ sub onContentSelected()
             teamMenu(it.name, i - 1)
         end if
     else if m.mode = "recordings"
+        if m.video.visible then stopVideo(false, true)
         m.recordingId = it.id
         isLive = (it.status = "recording")
         saved = readResumePos(it.id)
@@ -1197,6 +1199,14 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.rejoinWaits = 0
     m.readyTimer.control = "stop"
     m.retryTimer.control = "stop"
+    ' A rejoin check still in flight belongs to the previous stream; its answer
+    ' would seek this one.
+    for each tg in ["rejoin", "vodrejoin"]
+        if m.tasks[tg] <> invalid
+            m.tasks[tg].control = "stop"
+            m.tasks.delete(tg)
+        end if
+    end for
     m.stallTimer.control = "start"
     if m.top.dialog <> invalid and m.top.dialog.loading = true
         ' keep the existing loading dialog
@@ -1531,6 +1541,10 @@ end sub
 
 ' Shared by the Movies list and the Recent tab.
 sub selectVodItem(it as Object)
+    ' Picked from the playback overlay: stop what's on screen first. Otherwise the old
+    ' stream's retry/rejoin handlers fire against the new movie's id and jump it to the
+    ' end of the muxed file, which "finishes" and drops back to the menu.
+    if m.video.visible then stopVideo(false, true, m.vodId = it.id)
     m.vodId = it.id
     m.vodCodec = ""
     m.playTitle = txt(it.name)
@@ -1958,7 +1972,9 @@ sub focusVideo()
     m.video.setFocus(true)
 end sub
 
-sub stopVideo(clearResume = false, release = false)
+' keepMux: restarting the same movie - don't tell the Pi to drop the mux we are
+' about to reuse (the stop and the new /play race and the stop can win).
+sub stopVideo(clearResume = false, release = false, keepMux = false)
     key = ""
     if m.vodId >= 0
         key = "vpos_" + m.vodId.toStr()
@@ -2013,7 +2029,7 @@ sub stopVideo(clearResume = false, release = false)
         m.grid.translation = [470, 170]
         m.grid.scale = [1, 1]
     end if
-    if m.vodId >= 0
+    if m.vodId >= 0 and not keepMux
         ' Release the provider connection and the muxed files on the Pi right away
         ' instead of letting them sit until the idle reaper runs.
         api("/vod/" + m.vodId.toStr() + "/stop", "vodstop", "POST", "")
@@ -2334,6 +2350,9 @@ sub onApiResponse(ev as Object)
         else if r.duration <> invalid and r.duration > m.finishPos + 4
             ' The mux produced more of the movie - rejoin where playback stopped.
             m.rejoinWaits = 0
+            ' Always resume where playback stopped: rejoinPos < 0 means "jump to the
+            ' live edge", which for a movie is the end of the muxed file.
+            m.rejoinPos = 0
             if m.finishPos > 4 then m.rejoinPos = m.finishPos + 1
             rejoinLive()
         else
