@@ -212,6 +212,11 @@ function renderGrid() {
       html += `<div class="gcell ${isNow ? 'now' : ''} ${p.scheduled ? 'sched' : ''} ${isSel ? 'sel' : ''}" data-ri="${ri}" data-ci="${ci}" style="left:${x}px;width:${w}px;height:${chH - 12}px">${esc(txt(p.title))}${p.scheduled ? ' ●' : ''}</div>`;
       ci++;
     }
+    if (!ci) {
+      // Event channels ("NCAAF 09: Colorado vs ...") carry the event in the name, not the EPG
+      const ev = (ch.name.match(/:\s*(.+)$/) || [])[1];
+      html += `<div class="gcell gempty" data-ri="${ri}" data-ci="-1" style="left:${cw}px;width:${(end - start) / 1800 * sw}px;height:${chH - 12}px">${esc(ev || 'No guide data')}</div>`;
+    }
     html += '</div>';
   });
   el.innerHTML = html;
