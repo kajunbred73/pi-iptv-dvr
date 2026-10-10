@@ -193,7 +193,7 @@ sub render()
             col = "#232A33"
             if isRow and focused then col = "#3D6BFF"
             m.rows.appendChild(mkRect(m.CHAN_W, y, m.GRID_W, m.ROW_H, col))
-            m.rows.appendChild(mkLabel(m.CHAN_W + 14, y, m.GRID_W - 28, m.ROW_H, "No guide data  -  OK to watch", "#9AA4AE", "font:SmallSystemFont"))
+            m.rows.appendChild(mkLabel(m.CHAN_W + 14, y, m.GRID_W - 28, m.ROW_H, noGuideText(ch.name), "#9AA4AE", "font:SmallSystemFont"))
         else
             for p = 0 to progs.count() - 1
                 pr = progs[p]
@@ -220,6 +220,17 @@ sub render()
     end for
     updateDetail()
 end sub
+
+' Event channels ("NCAAF 09: Colorado vs ...") carry the event in the name, not the EPG
+function noGuideText(name as dynamic) as string
+    if name = invalid then name = ""
+    i = Instr(1, name, ":")
+    if i > 0
+        ev = Mid(name, i + 1).Trim()
+        if ev <> "" then return ev + "  -  OK to watch"
+    end if
+    return "No guide data  -  OK to watch"
+end function
 
 function fmtDate(t as integer) as string
     dt = CreateObject("roDateTime")
