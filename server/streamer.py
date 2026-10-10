@@ -143,6 +143,53 @@ def _copy_args(url=None, dump_extra=True):
             "-muxdelay", "0", "-muxpreload", "0"]
 
 
+_TS_VCODECS = {0x1B: "h264", 0x24: "hevc", 0x02: "mpeg2", 0x51: "av1", 0xEA: "vc1"}
+
+
+def _ts_vcodec(path):
+    """Video codec declared in an MPEG-TS file's PMT ('hevc', 'h264', ...) or ''.
+
+    ffprobe could answer this too, but it costs a subprocess and a probe delay;
+    the PMT is a couple of packets into the first segment."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(188 * 80)
+    except OSError:
+        return ""
+    pmt_pid = None
+    for off in range(0, len(data) - 187, 188):
+        if data[off] != 0x47:
+            continue
+        p = data[off:off + 188]
+        if not (p[1] & 0x40):
+            continue  # need the start of a section
+        pid = ((p[1] & 0x1F) << 8) | p[2]
+        i = 4
+        afc = (p[3] >> 4) & 3
+        if afc & 2:
+            i += 1 + p[4]
+        if not (afc & 1) or i >= 188:
+            continue
+        pl = p[i:]
+        if pid == 0 and pmt_pid is None:
+            # PAT: first program entry's PID is the PMT's.
+            s = pl[pl[0] + 1:]
+            if len(s) > 11 and s[0] == 0x00:
+                pmt_pid = ((s[10] & 0x1F) << 8) | s[11]
+        elif pmt_pid is not None and pid == pmt_pid:
+            s = pl[pl[0] + 1:]
+            if len(s) < 12 or s[0] != 0x02:
+                continue
+            j = 12  # past PMT header + program_info_length
+            while j + 5 <= len(s):
+                st = s[j]
+                il = ((s[j + 3] & 0xF) << 8) | s[j + 4]
+                if st in _TS_VCODECS:
+                    return _TS_VCODECS[st]
+                j += 5 + il
+    return ""
+
+
 # ---------------------------------------------------------------- live proxy
 
 class LiveSession:
@@ -738,6 +785,7 @@ class VodSession:
         self.playlist = os.path.join(self.dir, "index.m3u8")
         self.proc = None
         self.last_access = time.time()
+        self._vcodec = None
 
     def start(self):
         if self.alive():
@@ -748,6 +796,7 @@ class VodSession:
                 self.proc.kill()
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir, exist_ok=True)
+        self._vcodec = None
         cmd = [FFMPEG] + _input_args(self.movie["url"], self.start_at) + _copy_args(self.movie["url"], dump_extra=False) + [
             "-f", "hls", "-hls_time", "6", "-hls_list_size", "0",
             "-hls_playlist_type", "event",
@@ -777,6 +826,13 @@ class VodSession:
         except OSError:
             return 0.0
         return sum(float(x) for x in re.findall(r"#EXTINF:([\d.]+)", text))
+
+    def vcodec(self):
+        """'hevc'/'h264'/... from the first segment's PMT. Lets the client say
+        'your device can't decode HEVC' instead of silently failing to play."""
+        if self._vcodec is None:
+            self._vcodec = _ts_vcodec(os.path.join(self.dir, "seg00000.ts"))
+        return self._vcodec
 
     def last_error(self):
         """Last non-empty ffmpeg.log line (why muxing failed), or ''."""

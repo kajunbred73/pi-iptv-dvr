@@ -64,6 +64,7 @@ sub init()
     m.vodId = -1
     m.vodResume = 0
     m.vodOffset = 0
+    m.vodCodec = ""
     m.vodGroup = ""
     m.resumeIsVod = false
     m.playTitle = ""
@@ -86,6 +87,7 @@ sub init()
     m.stallPos = -1
     m.stallTicks = 0
     m.rejoinPos = -1
+    m.rejoinWaits = 0
     m.autoRetunes = 0
     m.playChannel = invalid
     m.lastChannel = invalid
@@ -1189,6 +1191,7 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.stallTicks = 0
     m.rejoinPos = -1
     m.finishPos = 0
+    m.rejoinWaits = 0
     m.readyTimer.control = "stop"
     m.retryTimer.control = "stop"
     m.stallTimer.control = "start"
@@ -1258,7 +1261,8 @@ end sub
 ' If the position hasn't advanced ~15s after playback had started, treat it like a
 ' "finished" that never fired and go through the normal rejoin flow.
 sub onStallCheck()
-    if not m.video.visible or not m.isLive or not m.seenPlaying then return
+    if not m.video.visible or not m.seenPlaying then return
+    if not m.isLive and m.vodId < 0 then return
     if m.video.state <> "playing" and m.video.state <> "buffering" then return
     curPos = m.video.position
     if curPos = invalid then return
@@ -1276,6 +1280,8 @@ sub onStallCheck()
         if m.retryCount < 30
             m.retrying = true
             m.retryTimer.control = "start"
+        else if m.vodId >= 0
+            playError("The movie stream kept freezing and could not recover. " + m.lastErr)
         else
             playError("The live stream kept freezing (" + txt(m.lastSegs) + " segments buffered). " + m.lastErr)
         end if
@@ -1523,6 +1529,7 @@ end sub
 ' Shared by the Movies list and the Recent tab.
 sub selectVodItem(it as Object)
     m.vodId = it.id
+    m.vodCodec = ""
     m.playTitle = txt(it.name)
     saved = readVodPos(it.id)
     if saved > 5
@@ -1720,6 +1727,7 @@ sub playChannel(ch as Object)
     m.recordingId = -1
     m.tsContinuing = false
     m.vodId = -1
+    m.vodCodec = ""
     m.playTitle = ch.name
     showLoading("Tuning...")
     api("/timeshift", "timeshift", "POST", FormatJson({ channel_id: ch.id }))
@@ -2059,10 +2067,13 @@ sub onVideoState()
             m.retryCount = m.retryCount + 1
             if m.video.position <> invalid then m.finishPos = m.video.position
             m.retryTimer.control = "start"
-        else if m.vodId >= 0 and m.retryCount < 30
+        else if m.vodId >= 0 and m.retryCount < 30 and (m.seenPlaying or m.retryCount = 0)
             ' The movie's playlist is still being muxed behind playback - "finished"
             ' only means the player caught the produced edge. Same rejoin-on-growth
-            ' flow as live instead of dropping back to the menu.
+            ' flow as live instead of dropping back to the menu. One grace retry is
+            ' allowed before "playing" too (the player can race a tiny playlist), but
+            ' a stream that NEVER reaches playing is a decode failure - rejoining it
+            ' forever just shows a black screen and then drops to the menu.
             m.retrying = true
             m.retryCount = m.retryCount + 1
             if m.video.position <> invalid then m.finishPos = m.video.position
@@ -2070,6 +2081,16 @@ sub onVideoState()
         else
             if m.isLive
                 playError("The live buffer stopped producing video (" + txt(m.lastSegs) + " segments). " + m.lastErr)
+            else if m.vodId >= 0
+                hint = ""
+                if m.vodCodec = "hevc"
+                    hint = "This movie is HEVC (H.265) - only 4K-capable Roku models can decode it. (Your phone app decodes it in software, which is why it works there.)"
+                else if m.vodCodec <> ""
+                    hint = "This movie's video format (" + m.vodCodec + ") may not be playable on this Roku."
+                else
+                    hint = "The stream never produced a frame the Roku could decode."
+                end if
+                playError("The movie would not play. " + hint)
             else
                 stopVideo(true, true)
             end if
@@ -2179,6 +2200,7 @@ sub onApiResponse(ev as Object)
     else if tag = "readycheck"
         if m.vodId >= 0
             ' Movie muxer poll: play once a segment exists, fail if ffmpeg died first.
+            if r.vcodec <> invalid then m.vodCodec = txt(r.vcodec)
             if r.ready = true or r.ready = 1
                 ' The playlist starts at vodOffset (0 for a full mux, the resume point
                 ' for a seek-start), so the player's position is relative to that.
@@ -2289,6 +2311,7 @@ sub onApiResponse(ev as Object)
         if not m.video.visible then return
         m.lastErr = txt(r.error)
         m.lastSegs = r.segments
+        if r.vcodec <> invalid then m.vodCodec = txt(r.vcodec)
         if r.alive <> true and r.alive <> 1
             ' Muxer is gone: finished is real if the playlist was completed, fatal otherwise.
             if r.ended = true or r.ended = 1
@@ -2298,11 +2321,19 @@ sub onApiResponse(ev as Object)
             end if
         else if r.duration <> invalid and r.duration > m.finishPos + 4
             ' The mux produced more of the movie - rejoin where playback stopped.
+            m.rejoinWaits = 0
             if m.finishPos > 4 then m.rejoinPos = m.finishPos + 1
             rejoinLive()
         else
-            m.retrying = true
-            m.retryTimer.control = "start"
+            ' Mux alive but hasn't grown past where we stopped yet - keep waiting,
+            ' but a provider stall can hold it there indefinitely, so cap the wait.
+            m.rejoinWaits = m.rejoinWaits + 1
+            if m.rejoinWaits > 40
+                playError("The movie stopped loading new video (provider stalled). Try again - it may recover on the provider's side.")
+            else
+                m.retrying = true
+                m.retryTimer.control = "start"
+            end if
         end if
     else if tag = "touch"
         ' heartbeat; nothing to do
