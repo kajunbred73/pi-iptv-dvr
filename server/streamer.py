@@ -770,6 +770,14 @@ class VodSession:
             time.sleep(0.25)
         return False
 
+    def duration(self):
+        """Seconds of movie muxed into the playlist so far."""
+        try:
+            text = open(self.playlist).read()
+        except OSError:
+            return 0.0
+        return sum(float(x) for x in re.findall(r"#EXTINF:([\d.]+)", text))
+
     def last_error(self):
         """Last non-empty ffmpeg.log line (why muxing failed), or ''."""
         try:
@@ -821,9 +829,14 @@ class VodManager:
                         complete = "#EXT-X-ENDLIST" in open(s.playlist).read()
                     except OSError:
                         pass
-                if start_at + 30 < s.start_at or (not s.alive() and not complete):
-                    # Viewer wants an earlier point than this mux covers, or the
-                    # muxer died mid-file: restart at the requested position.
+                head = s.start_at + s.duration()
+                if (start_at + 30 < s.start_at
+                        or (not s.alive() and not complete)
+                        or (s.alive() and not complete and start_at > head + 5)):
+                    # Viewer wants an earlier point than this mux covers, the muxer
+                    # died mid-file, or the resume point is past what the mux has
+                    # produced so far (reusing it would seek the player off the end
+                    # of the playlist - it just "finishes" and drops to the menu).
                     s.start_at = max(0, start_at)
                     s.start()
             s.last_access = time.time()

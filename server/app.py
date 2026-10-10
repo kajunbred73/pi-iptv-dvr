@@ -721,6 +721,7 @@ def api_vod_ready(vid):
         "ok": True,
         "ready": segs > 0,
         "segments": segs,
+        "duration": s.duration(),
         "alive": s.alive(),
         "ended": ended,
         "warn": warn,

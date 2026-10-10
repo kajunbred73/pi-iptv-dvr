@@ -1960,7 +1960,11 @@ sub stopVideo(clearResume = false, release = false)
             m.reg.flush()
         else
             lastPos = m.video.position
+            ' Movie position on screen is relative to the muxed playlist; the resume
+            ' mark must be the movie's own timestamp, so add the seek offset back.
+            if m.vodId >= 0 then lastPos = lastPos + m.vodOffset
             totalDur = m.video.duration
+            if m.vodId >= 0 then totalDur = totalDur + m.vodOffset
             if lastPos > 5 and (totalDur <= 0 or lastPos < totalDur - 15)
                 m.reg.write(key, lastPos.toStr())
                 m.reg.flush()
@@ -2047,10 +2051,18 @@ sub onVideoState()
     else if st = "finished"
         ' A live buffer only really ends when the Pi writes ENDLIST; if the player ran off the
         ' end of the growing playlist, rejoin once the buffer has grown instead of stopping.
-        if m.retrying and m.isLive
+        if m.retrying and (m.isLive or m.vodId >= 0)
             ' The stall watchdog already armed a retry for this same stall - a second
             ' "finished" arriving in that window must not count as a fatal end.
         else if m.recordingId >= 0 and m.isLive and m.retryCount < 30
+            m.retrying = true
+            m.retryCount = m.retryCount + 1
+            if m.video.position <> invalid then m.finishPos = m.video.position
+            m.retryTimer.control = "start"
+        else if m.vodId >= 0 and m.retryCount < 30
+            ' The movie's playlist is still being muxed behind playback - "finished"
+            ' only means the player caught the produced edge. Same rejoin-on-growth
+            ' flow as live instead of dropping back to the menu.
             m.retrying = true
             m.retryCount = m.retryCount + 1
             if m.video.position <> invalid then m.finishPos = m.video.position
@@ -2067,9 +2079,12 @@ end sub
 
 sub onRetry()
     m.retrying = false
-    if m.video.visible and m.recordingId >= 0
-        ' Ask the Pi whether the buffer is still being written before rejoining.
-        m.readyAttempts = 0
+    if not m.video.visible then return
+    m.readyAttempts = 0
+    ' Ask the Pi whether the buffer is still being written before rejoining.
+    if m.vodId >= 0
+        api("/vod/" + m.vodId.toStr() + "/ready", "vodrejoin")
+    else if m.recordingId >= 0
         api("/timeshift/" + m.recordingId.toStr() + "/ready", "rejoin")
     end if
 end sub
@@ -2109,7 +2124,7 @@ sub onApiError(ev as Object)
         toast("Teams saved on this Roku only - the Pi did not answer")
         return
     end if
-    if t.tag = "timeshift" or t.tag = "readycheck" or t.tag = "rejoin" or t.tag = "vodplay"
+    if t.tag = "timeshift" or t.tag = "readycheck" or t.tag = "rejoin" or t.tag = "vodplay" or t.tag = "vodrejoin"
         m.readyTimer.control = "stop"
         playError("The Pi did not answer " + t.url + Chr(10) + t.error + Chr(10) + "If this says HTTP 404, the Pi is running old server code: cd pi-iptv-dvr && git pull && sudo systemctl restart pi-iptv-dvr")
         return
@@ -2165,11 +2180,24 @@ sub onApiResponse(ev as Object)
         if m.vodId >= 0
             ' Movie muxer poll: play once a segment exists, fail if ffmpeg died first.
             if r.ready = true or r.ready = 1
-                m.readyTimer.control = "stop"
                 ' The playlist starts at vodOffset (0 for a full mux, the resume point
                 ' for a seek-start), so the player's position is relative to that.
                 startPos = m.vodResume - m.vodOffset
                 if startPos < 0 then startPos = 0
+                if startPos > 0 and r.duration <> invalid and r.duration < startPos + 5
+                    ' An existing mux was reused and hasn't produced the resume point
+                    ' yet; seeking now would run off the end and instantly "finish".
+                    m.readyAttempts = m.readyAttempts + 1
+                    if m.top.dialog <> invalid and m.top.dialog.loading = true
+                        m.top.dialog.title = "Skipping to resume point..."
+                    end if
+                    if m.readyAttempts > 240
+                        m.readyTimer.control = "stop"
+                        playError("The movie could not reach the resume point.")
+                    end if
+                    return
+                end if
+                m.readyTimer.control = "stop"
                 play(m.streamUrl, m.playTitle, false, startPos)
             else if r.alive <> true and r.alive <> 1
                 m.readyTimer.control = "stop"
@@ -2256,6 +2284,25 @@ sub onApiResponse(ev as Object)
             end if
         else
             playError("The Pi stopped this channel's recording (" + txt(r.status) + "). " + txt(r.error))
+        end if
+    else if tag = "vodrejoin"
+        if not m.video.visible then return
+        m.lastErr = txt(r.error)
+        m.lastSegs = r.segments
+        if r.alive <> true and r.alive <> 1
+            ' Muxer is gone: finished is real if the playlist was completed, fatal otherwise.
+            if r.ended = true or r.ended = 1
+                stopVideo(true, true)
+            else
+                playError("The movie stream stopped: " + txt(r.error))
+            end if
+        else if r.duration <> invalid and r.duration > m.finishPos + 4
+            ' The mux produced more of the movie - rejoin where playback stopped.
+            if m.finishPos > 4 then m.rejoinPos = m.finishPos + 1
+            rejoinLive()
+        else
+            m.retrying = true
+            m.retryTimer.control = "start"
         end if
     else if tag = "touch"
         ' heartbeat; nothing to do
