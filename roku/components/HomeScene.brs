@@ -2181,7 +2181,9 @@ sub onApiResponse(ev as Object)
         ' Provider probe: when the provider host won't answer, every tune would
         ' sit at 0 segments - say so up front instead of after the timeout.
         if r.provider <> invalid and r.provider.ok = false then st = "PROVIDER DOWN  |  " + st
-        m.status.text = st + "  |  " + m.server
+        ' Build tag so we can tell at a glance whether the sideloaded update took.
+        ai = CreateObject("roAppInfo")
+        m.status.text = st + "  |  " + m.server + "  |  b" + txt(ai.GetBuildVersion())
     else if tag = "timeshift"
         if r.ok = true or r.ok = 1
             m.recordingId = r.recording_id
@@ -2313,11 +2315,17 @@ sub onApiResponse(ev as Object)
         m.lastSegs = r.segments
         if r.vcodec <> invalid then m.vodCodec = txt(r.vcodec)
         if r.alive <> true and r.alive <> 1
-            ' Muxer is gone: finished is real if the playlist was completed, fatal otherwise.
-            if r.ended = true or r.ended = 1
+            ' Muxer is gone: "finished" is only a real end if the viewer actually
+            ' played through to it. If nothing ever played, ended/silent-exit just
+            ' drops to the menu with no explanation - report it instead.
+            if (r.ended = true or r.ended = 1) and (m.seenPlaying or m.finishPos > 30)
                 stopVideo(true, true)
             else
-                playError("The movie stream stopped: " + txt(r.error))
+                hint = ""
+                if m.vodCodec = "hevc"
+                    hint = Chr(10) + "This movie is HEVC (H.265) - only 4K-capable Roku models can decode it."
+                end if
+                playError("The movie stream stopped before it could play. " + txt(r.error) + hint)
             end if
         else if r.duration <> invalid and r.duration > m.finishPos + 4
             ' The mux produced more of the movie - rejoin where playback stopped.
