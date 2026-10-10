@@ -1632,7 +1632,9 @@ sub renderRecents()
     ' the last /recordings response), then movies with a resume mark.
     if m.recCache <> invalid
         for each rec in m.recCache
-            if rec.status = "done"
+            ' A finished live buffer only holds the few seconds past where you left, so
+            ' "resuming" it plays briefly and stops; its channel row below tunes live.
+            if rec.status = "done" and rec.timeshift <> true
                 saved = readResumePos(rec.id)
                 if saved > 5
                     pct = 0
