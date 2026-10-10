@@ -17,6 +17,27 @@ log = logging.getLogger("streamer")
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 FFPROBE = shutil.which("ffprobe") or os.path.join(os.path.dirname(FFMPEG), "ffprobe")
 
+_HLS_ANY_EXT = None
+
+
+def _hls_any_ext_args():
+    """Newer ffmpeg (incl. Debian 12's 5.1.x security updates) refuses HLS segments whose
+    URL has no media extension, or whose extension doesn't match the content. Older
+    builds have neither the check nor these options, so only pass what exists."""
+    global _HLS_ANY_EXT
+    if _HLS_ANY_EXT is None:
+        try:
+            out = subprocess.run([FFMPEG, "-hide_banner", "-h", "demuxer=hls"],
+                                 capture_output=True, text=True, timeout=10).stdout
+        except Exception:
+            out = ""
+        _HLS_ANY_EXT = []
+        if "allowed_segment_extensions" in out:
+            _HLS_ANY_EXT += ["-allowed_segment_extensions", "ALL"]
+        if "extension_picky" in out:
+            _HLS_ANY_EXT += ["-extension_picky", "0"]
+    return _HLS_ANY_EXT
+
 
 _XTREAM_TS = re.compile(r"(/live/[^/]+/[^/]+/\d+)\.ts$")
 
@@ -35,11 +56,15 @@ def _input_args(url, start_at=0):
     args = ["-hide_banner", "-loglevel", "warning", "-nostdin",
             "-fflags", "+genpts+discardcorrupt+igndts", "-err_detect", "ignore_err",
             "-analyzeduration", "3000000", "-probesize", "5000000"]
+    hls = url.split("?")[0].endswith(".m3u8")
     if url.startswith("http"):
         # Xtream .ts streams are closed by the provider mid-transfer at random offsets;
-        # on_network_error + at_eof keep ffmpeg reconnecting instead of dying.
-        args += ["-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1",
-                 "-reconnect_on_network_error", "1", "-reconnect_delay_max", "5",
+        # on_network_error + at_eof keep ffmpeg reconnecting instead of dying. Not for
+        # HLS: every playlist/segment fetch ends in EOF, which at_eof turns into a retry.
+        args += ["-reconnect", "1", "-reconnect_streamed", "1"]
+        if not hls:
+            args += ["-reconnect_at_eof", "1"]
+        args += ["-reconnect_on_network_error", "1", "-reconnect_delay_max", "5",
                  # A stalled connection that stays open produces no error and no EOF, so none
                  # of the reconnect flags fire and segments just stop appearing. rw_timeout
                  # turns a >10s silent read/write into an error the reconnect flags can act on.
@@ -51,6 +76,10 @@ def _input_args(url, start_at=0):
         # Input-side seek: for seekable files (mp4/mkv over HTTP range requests)
         # ffmpeg jumps straight to the byte offset instead of re-downloading.
         args += ["-ss", str(int(start_at))]
+    if hls:
+        # Xtream HLS segments are extensionless /hls/<token> URLs, which ffmpeg's
+        # hls demuxer refuses by default ("not in allowed_segment_extensions").
+        args += _hls_any_ext_args()
     args += ["-i", url]
     return args
 
