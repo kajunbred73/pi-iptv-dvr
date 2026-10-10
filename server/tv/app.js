@@ -133,7 +133,7 @@ function showTab(idx) {
   if (t === 'Favorites') openGrid('favorites=1', 'Favorites');
   else if (t === 'Guide') openGrid('', 'Guide');
   else if (t === 'Recent') { S.mode = 'recent'; setHint('OK: watch   hold OK: remove'); renderRecents(); }
-  else if (t === 'Search') { S.mode = 'list'; setHint('OK: search channels and shows'); S.lastQuery ? searchFor(S.lastQuery) : setRows([], [], 'Press OK to search channels and shows (e.g. ABC, ESPN, Astros).'); }
+  else if (t === 'Search') { S.mode = 'list'; setHint('OK: search channels and shows'); S.lastQuery ? searchFor(S.lastQuery) : setRows(['Search channels and shows (e.g. ABC, ESPN, Astros)...'], [{ kind: 'prompt' }]); }
   else if (t === 'Categories') { S.mode = 'categories'; setHint('OK: open category guide'); api('/groups', onGroups); }
   else if (t === 'Movies') { S.mode = 'vodcats'; setHint('OK: open category'); api('/vod/groups', onVodGroups); }
   else if (t === 'Sports Teams') { S.mode = 'teams'; setHint('OK: team options   hold OK: add team'); renderTeams(); }
@@ -266,7 +266,7 @@ function updateDetail() {
       if (it.kind === 'program') {
         const p = it.p;
         d = txt(p.channel_name) + '   ' + fmtDay(p.start) + ' ' + fmtTime(p.start) + ' - ' + fmtTime(p.stop);
-      } else {
+      } else if (it.ch) {
         const ch = it.ch;
         d = txt(ch.grp);
         if (ch.now) d += '   |   Now: ' + txt(ch.now.title) + ' (' + fmtTime(ch.now.start) + ' - ' + fmtTime(ch.now.stop) + ')';
@@ -289,7 +289,8 @@ function selectFocused() {
   if (S.overlay) hideOverlay();
   switch (S.mode) {
     case 'list':
-      it.kind === 'program' ? programMenu(it.p) : channelMenu(it.ch);
+      if (it.kind === 'prompt') promptSearch();
+      else it.kind === 'program' ? programMenu(it.p) : channelMenu(it.ch);
       break;
     case 'categories':
       openGrid('group=' + urlEnc(it.name), it.name || '(no group)');
@@ -725,13 +726,18 @@ function onSchedules(r) {
 }
 function onScheduleCancel() { toast('Recording cancelled'); if (S.mode === 'scheduled') api('/schedules', onSchedules); }
 
+function promptSearch() {
+  inputDialog('Search channels and shows', '', q => { if (q) { S.mode = 'list'; S.contentIdx = 0; searchFor(q); S.focus = 'content'; } });
+}
+
 function searchFor(q) {
   S.lastQuery = q;
   $('heading').textContent = 'Search: ' + q;
   api('/search?q=' + urlEnc(q), r => {
     if (S.mode !== 'list') return;
-    const items = [];
-    const labels = [];
+    // A clickable first row: with a mouse there's no OK key to start another search.
+    const items = [{ kind: 'prompt' }];
+    const labels = ['New search...'];
     for (const ch of (r.channels || [])) {
       labels.push((ch.favorite ? '*   ' : '    ') + txt(ch.num) + '   ' + txt(ch.name) +
         (ch.now ? '   -   ' + txt(ch.now.title) : ''));
@@ -742,7 +748,8 @@ function searchFor(q) {
         '   (' + txt(p.channel_name) + ')' + (p.now_playing ? '   [ON NOW]' : '') + (p.scheduled ? '   [REC]' : ''));
       items.push({ kind: 'program', p });
     }
-    setRows(labels, items, "Nothing matches '" + q + "'.");
+    if (items.length === 1) labels[0] = "Nothing matches '" + q + "'. New search...";
+    setRows(labels, items);
     setHint('OK: watch / record / favorite   hold OK: star   Back: menu');
   });
 }
@@ -1007,7 +1014,7 @@ function applyOverlayTab(idx) {
     });
   } else if (t === 'Search') {
     hideOverlay();
-    inputDialog('Search channels and shows', '', q => { if (q) { S.mode = 'list'; searchFor(q); S.focus = 'content'; } });
+    promptSearch();
   } else if (t === 'Settings') {
     hideOverlay();
     showTab(S.tabs.indexOf('Settings'));
