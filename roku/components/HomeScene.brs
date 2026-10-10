@@ -113,6 +113,9 @@ sub init()
     m.appBuild = "?"
     ai = CreateObject("roAppInfo")
     if ai <> invalid then m.appBuild = ai.GetValue("build_version")
+    ' HD-only models (e.g. Roku Express) have no HEVC decoder.
+    cd = CreateObject("roDeviceInfo").CanDecodeVideo({ Codec: "hevc" })
+    m.canHevc = (cd <> invalid and cd.result = true)
     m.server = ""
     if m.reg.exists("server") then m.server = m.reg.read("server")
 
@@ -954,15 +957,47 @@ sub onVodSearchEntered(ev as Object)
     k = ev.getRoSGNode()
     if ev.getData() = 0
         q = k.text.trim()
-        if q <> ""
-            m.mode = "vodlist"
-            m.vodGroup = ""
-            m.heading.text = "Movies: '" + q + "'"
-            m.hint.text = "OK: play movie   *: clear resume mark   Back: categories"
-            api("/vod?q=" + urlEnc(q), "vodlist")
-        end if
+        if q <> "" then vodSearch(q)
     end if
     k.close = true
+end sub
+
+sub vodSearch(q as String)
+    m.mode = "vodlist"
+    m.vodGroup = ""
+    m.heading.text = "Movies: '" + q + "'"
+    m.hint.text = "OK: play movie   *: clear resume mark   Back: categories"
+    api("/vod?q=" + urlEnc(q), "vodlist")
+end sub
+
+' The Pi only remuxes, so an HEVC movie on a Roku without an HEVC decoder can't play.
+' Say so up front and offer the other versions of the title (often H.264).
+function hevcBlocked() as Boolean
+    if m.vodId < 0 or m.vodCodec <> "hevc" or m.canHevc then return false
+    title = m.playTitle
+    stopVideo(false, true)
+    ' "The Housemaid (2025)" -> "Housemaid": other versions differ in year/article.
+    q = CreateObject("roRegex", "\s*\(\d{4}\)\s*$", "").replaceAll(title, "").trim()
+    if LCase(Left(q, 4)) = "the " then q = Mid(q, 5)
+    m.hevcQuery = q
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = "Can't play on this Roku"
+    d.message = title + " is HEVC (H.265) video, and this Roku has no HEVC decoder (only 4K models do)." + Chr(10) + "Another version of the movie is often H.264, which plays fine."
+    d.buttons = ["Find other versions", "OK"]
+    d.observeField("buttonSelected", "onHevcDialog")
+    m.top.dialog = d
+    d.setFocus(true)
+    return true
+end function
+
+sub onHevcDialog(ev as Object)
+    d = ev.getRoSGNode()
+    d.close = true
+    m.top.dialog = invalid
+    if ev.getData() = 0 and m.hevcQuery <> ""
+        vodSearch(m.hevcQuery)
+    end if
+    focusPane()
 end sub
 
 sub promptSearch()
@@ -2063,6 +2098,8 @@ sub onVideoState()
         m.retryCount = 0
         m.retrying = false
         m.autoRetunes = 0
+    else if (st = "error" or st = "finished") and m.vodId >= 0 and m.vodCodec = "hevc" and not m.canHevc
+        hevcBlocked()
     else if st = "error"
         if m.video.position <> invalid and m.video.position > 4 then m.finishPos = m.video.position
         if m.retrying and m.isLive
@@ -2223,6 +2260,7 @@ sub onApiResponse(ev as Object)
         if m.vodId >= 0
             ' Movie muxer poll: play once a segment exists, fail if ffmpeg died first.
             if r.vcodec <> invalid then m.vodCodec = txt(r.vcodec)
+            if hevcBlocked() then return
             if r.ready = true or r.ready = 1
                 ' The playlist starts at vodOffset (0 for a full mux, the resume point
                 ' for a seek-start), so the player's position is relative to that.
@@ -2334,6 +2372,7 @@ sub onApiResponse(ev as Object)
         m.lastErr = txt(r.error)
         m.lastSegs = r.segments
         if r.vcodec <> invalid then m.vodCodec = txt(r.vcodec)
+        if hevcBlocked() then return
         if r.alive <> true and r.alive <> 1
             ' Muxer is gone: "finished" is only a real end if the viewer actually
             ' played through to it. If nothing ever played, ended/silent-exit just
