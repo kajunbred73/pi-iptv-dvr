@@ -148,7 +148,8 @@ function openGrid(filter, title) {
   S.mode = 'grid';
   S.gridFilter = filter; S.gridTitle = title; S.gridFrom = 0;
   $('heading').textContent = title;
-  setHint('Arrows: move   OK: watch / record   hold OK: favorite   Back: menu');
+  setHint('Arrows: move   OK: watch / record   hold OK: favorite   Back: menu' +
+    (filter === 'favorites=1' ? '   Mouse: drag a channel to reorder' : ''));
   $('content').innerHTML = ''; $('empty').textContent = '';
   loadGrid();
 }
@@ -197,9 +198,10 @@ function renderGrid() {
   let html = `<div id="timebar" style="margin-left:${cw}px">`;
   for (let t = start; t < end; t += 1800) html += `<div class="tslot" style="width:${sw}px">${fmtTime(t)}</div>`;
   html += '</div>';
+  const favDrag = !S.overlay && S.gridFilter === 'favorites=1';
   r.channels.forEach((ch, ri) => {
     html += `<div class="grow ${ri === S.gridRow ? 'sel' : ''}" style="height:${chH}px">`;
-    html += `<div class="gchan ${ri === S.gridRow && S.gridCol === -1 && gridFocused() ? 'g-sel' : ''}" data-ri="${ri}" style="width:${cw}px;height:${chH}px">${ch.logo ? `<img src="${esc(ch.logo)}">` : ''}<span>${esc(txt(ch.num) + ' ' + ch.name)}</span></div>`;
+    html += `<div class="gchan ${ri === S.gridRow && S.gridCol === -1 && gridFocused() ? 'g-sel' : ''}" data-ri="${ri}"${favDrag ? ' draggable="true"' : ''} style="width:${cw}px;height:${chH}px">${ch.logo ? `<img draggable="false" src="${esc(ch.logo)}">` : ''}<span>${esc(txt(ch.num) + ' ' + ch.name)}</span></div>`;
     let ci = 0;
     for (const p of (ch.programs || [])) {
       const a = Math.max(p.start, start), b = Math.min(p.stop, end);
@@ -1296,6 +1298,52 @@ document.addEventListener('click', e => {
 
   if (t.closest('#video') && video.classList.contains('playing')) trickMenu();
 });
+
+// Mouse: drag a channel on the Favorites page to reorder it.
+let dragRi = -1;
+function clearDropMarks() {
+  document.querySelectorAll('#grid .grow.drop-above, #grid .grow.drop-below')
+    .forEach(g => g.classList.remove('drop-above', 'drop-below'));
+}
+function dropSpot(e) {
+  const row = dragRi >= 0 && S.mode === 'grid' && e.target.closest && e.target.closest('#grid .grow');
+  const gch = row && row.querySelector('.gchan');
+  if (!gch) return null;
+  const b = row.getBoundingClientRect();
+  return { row, ri: +gch.dataset.ri, after: e.clientY > b.top + b.height / 2 };
+}
+document.addEventListener('dragstart', e => {
+  const g = e.target.closest && e.target.closest('#grid .gchan[draggable="true"]');
+  if (!g) return;
+  dragRi = +g.dataset.ri;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', g.dataset.ri);
+});
+document.addEventListener('dragover', e => {
+  const d = dropSpot(e);
+  if (!d) return;
+  e.preventDefault();
+  clearDropMarks();
+  if (d.ri !== dragRi) d.row.classList.add(d.after ? 'drop-below' : 'drop-above');
+});
+document.addEventListener('drop', e => {
+  const d = dropSpot(e);
+  clearDropMarks();
+  if (!d) return;
+  e.preventDefault();
+  const chs = S.gridData.channels, from = dragRi;
+  dragRi = -1;
+  if (d.ri === from) return;
+  const moved = chs[from], ref = chs[d.ri];
+  chs.splice(from, 1);
+  const to = chs.indexOf(ref) + (d.after ? 1 : 0);
+  chs.splice(to, 0, moved);
+  S.gridRow = to; S.gridCol = -1;
+  renderGrid();
+  api('/favorites/move', () => { toast('Moved ' + moved.name); loadGrid(); }, 'POST',
+    JSON.stringify({ channel_id: moved.id, [d.after ? 'after' : 'before']: ref.id }));
+});
+document.addEventListener('dragend', () => { dragRi = -1; clearDropMarks(); });
 
 // Trap the browser Back button (what the TV remote's Back sends in browser
 // mode) so it acts as in-app Back instead of navigating away from the page.

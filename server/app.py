@@ -346,7 +346,8 @@ def api_favorite(cid):
 
 @app.post("/api/favorites/move")
 def api_fav_move():
-    """Rearrange favorites: {"channel_id": N, "dir": "up"|"down"|"top"|"bottom"}.
+    """Rearrange favorites: {"channel_id": N, "dir": "up"|"down"|"top"|"bottom"},
+    or {"channel_id": N, "before"|"after": other_favorite_id} (web drag-and-drop).
     Renumbers fav_order 1..n so ordering stays dense."""
     body = request.get_json(force=True, silent=True) or {}
     cid = int(body.get("channel_id") or 0)
@@ -357,7 +358,15 @@ def api_fav_move():
         abort(404)
     old = ids.index(cid)
     ids.pop(old)
-    if action == "up":
+    ref_key = "before" if "before" in body else "after" if "after" in body else None
+    if ref_key:
+        ref = int(body.get(ref_key) or 0)
+        if ref == cid:
+            return jsonify({"ok": True, "position": old})
+        if ref not in ids:
+            abort(404)
+        new = ids.index(ref) + (1 if ref_key == "after" else 0)
+    elif action == "up":
         new = max(0, old - 1)
     elif action == "down":
         new = min(len(ids), old + 1)
