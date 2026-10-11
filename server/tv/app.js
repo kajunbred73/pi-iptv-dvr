@@ -6,7 +6,7 @@
 
 const S = {
   server: storeGet('server') || (location.protocol.startsWith('http') ? location.origin : ''),
-  tabs: ['Favorites', 'Guide', 'Recent', 'Search', 'Categories', 'Movies',
+  tabs: ['Favorites', 'Guide', 'Recent', 'Search', 'Categories', 'Movies', 'Series',
          'Sports Teams', 'Recordings', 'Scheduled', 'Settings'],
   mode: 'grid',          // grid | list | categories | vodcats | vodlist | recent | teams | recordings | scheduled | settings
   items: [], contentIdx: 0,
@@ -17,6 +17,7 @@ const S = {
   lastQuery: '',
   // playback
   recordingId: -1, vodId: -1, vodResume: 0, vodOffset: 0, resumeIsVod: false,
+  vodKind: 'movie', seriesId: -1, seriesGroup: '', seriesListQ: '',
   streamUrl: '', playTitle: '', isLive: false, startPos: 0,
   retryCount: 0, autoRetunes: 0, finishPos: 0, lastSegs: 0, lastErr: '',
   pendingChannel: null, playChannel: null,
@@ -136,6 +137,7 @@ function showTab(idx) {
   else if (t === 'Search') { S.mode = 'list'; setHint('OK: search channels and shows'); S.lastQuery ? searchFor(S.lastQuery) : setRows(['Search channels and shows (e.g. ABC, ESPN, Astros)...'], [{ kind: 'prompt' }]); }
   else if (t === 'Categories') { S.mode = 'categories'; setHint('OK: open category guide'); api('/groups', onGroups); }
   else if (t === 'Movies') { S.mode = 'vodcats'; setHint('OK: open category'); api('/vod/groups', onVodGroups); }
+  else if (t === 'Series') { S.mode = 'seriescats'; setHint('OK: open category'); api('/series/groups', onSeriesGroups); }
   else if (t === 'Sports Teams') { S.mode = 'teams'; setHint('OK: team options   hold OK: add team'); renderTeams(); }
   else if (t === 'Recordings') { S.mode = 'recordings'; setHint('OK: play   hold OK: delete'); api('/recordings', onRecordings); }
   else if (t === 'Scheduled') { S.mode = 'scheduled'; setHint('OK: cancel recording'); api('/schedules', onSchedules); }
@@ -282,6 +284,9 @@ function updateDetail() {
     } else if (S.mode === 'categories') d = txt(it.count) + ' channels';
     else if (S.mode === 'vodcats') d = txt(it.count) + ' movies';
     else if (S.mode === 'vodlist') d = txt(it.grp);
+    else if (S.mode === 'seriescats') d = it.favs ? 'Series you added' : txt(it.count) + ' series';
+    else if (S.mode === 'serieslist') d = txt(it.grp);
+    else if (S.mode === 'serieseps') d = txt(it.plot);
     else if (S.mode === 'recent') d = it.kind === 'movie' ? 'Movie' : txt(it.title);
     else if (S.mode === 'recordings') d = txt(it.description);
     else if (S.mode === 'teams') d = txt(it.name);
@@ -312,8 +317,36 @@ function selectFocused() {
     case 'vodlist':
       selectVodItem(it);
       break;
+    case 'seriescats':
+      if (it.favs) {
+        S.seriesGroup = '__favs__';
+        S.seriesListQ = 'fav=1';
+        S.mode = 'serieslist';
+        $('heading').textContent = 'My Series';
+        setHint('OK: open series   hold OK: remove from My Series   Back: menu');
+        api('/series?fav=1', onSeriesList);
+      } else {
+        S.seriesGroup = txt(it.name);
+        S.seriesListQ = 'group=' + urlEnc(S.seriesGroup);
+        S.mode = 'serieslist';
+        $('heading').textContent = 'Series: ' + (txt(it.name) || '(no category)');
+        setHint('OK: open series   hold OK: add to My Series   Back: menu');
+        api('/series?' + S.seriesListQ, onSeriesList);
+      }
+      break;
+    case 'serieslist':
+      S.seriesId = it.id;
+      S.mode = 'serieseps';
+      $('heading').textContent = txt(it.name);
+      setHint('OK: play episode   hold OK: mark/unmark watched   Back: menu');
+      showLoading('Loading episodes...');
+      api(`/series/${it.id}/episodes`, onSeriesEps);
+      break;
+    case 'serieseps':
+      selectVodItem(it);
+      break;
     case 'recent':
-      it.kind === 'movie' ? selectVodItem(it) : playChannel({ id: it.id, name: it.name });
+      (it.kind === 'movie' || it.kind === 'episode') ? selectVodItem(it) : playChannel({ id: it.id, name: it.name });
       break;
     case 'teams':
       it.action === 'add' ? promptTeamAdd() : teamMenu(it.name, S.contentIdx - 1);
@@ -370,6 +403,7 @@ function playChannel(ch) {
 
 function selectVodItem(it) {
   S.vodId = it.id;
+  S.vodKind = it.kind === 'episode' ? 'episode' : 'movie';
   S.playTitle = txt(it.name);
   const saved = readVodPos(it.id);
   if (saved > 5) {
@@ -388,7 +422,7 @@ function vodPlayStart(pos) {
       S.streamUrl = r.stream_url;
       S.playTitle = txt(r.title);
       S.vodOffset = r.offset || 0;
-      addRecent({ kind: 'movie', id: S.vodId, name: S.playTitle });
+      addRecent({ kind: S.vodKind, id: S.vodId, name: S.playTitle });
       S.readyAttempts = 0;
       startReadyPoll();
     } else {
@@ -552,6 +586,23 @@ video.addEventListener('ended', () => {
   if (S.isLive && S.recordingId >= 0) {
     S.finishPos = video.currentTime || S.finishPos;
     rejoinCheck();
+  } else if (S.vodKind === 'episode' && S.vodId >= 0) {
+    // Episode finished (hls.js only fires 'ended' on ENDLIST = the real end):
+    // mark it watched, clear its resume mark, and autoplay the next episode.
+    const doneVid = S.vodId;
+    api(`/series/ep/${doneVid}/watched?watched=1`, null, 'POST', '{}');
+    storeDel('vpos_' + doneVid);
+    api(`/series/ep/${doneVid}/next`, r => {
+      if (r.ok && r.next) {
+        toast('Next: ' + txt(r.next.name));
+        S.vodId = r.next.vid;
+        S.vodKind = 'episode';
+        S.playTitle = txt(r.next.name);
+        vodPlayStart(0);
+      }
+      // next == null: end of the series/season - we've already stopped.
+    }, 'GET');
+    stopVideo(true);
   } else {
     stopVideo(true);
   }
@@ -677,6 +728,7 @@ function addRecent(item) {
 }
 function recentLabel(r) {
   if (r.kind === 'movie') return 'MOVIE   ' + txt(r.name);
+  if (r.kind === 'episode') return 'SERIES  ' + txt(r.name);
   return txt(r.name) + (txt(r.title) ? '   -   ' + txt(r.title) : '');
 }
 function renderRecents() {
@@ -711,6 +763,43 @@ function onVodList(r) {
   const items = r.items || [];
   setRows(items.map(mv => txt(mv.name) + (readVodPos(mv.id) > 5 ? '   (resume ' + fmtDur(readVodPos(mv.id)) + ')' : '')),
     items, 'No movies in this category.');
+}
+
+// ---------------------------------------------------------------- series
+
+function onSeriesGroups(r) {
+  if (S.mode !== 'seriescats' && !S.overlay) return;
+  const items = r.items || [];
+  setRows(items.map(g => g.favs
+    ? 'My Series   (' + txt(g.count) + ')'
+    : (txt(g.name) || '(no category)') + '   (' + txt(g.count) + ')'),
+    items, 'No series found. Try Refresh playlist and guide on server from Settings.');
+}
+
+function onSeriesList(r) {
+  if (S.mode !== 'serieslist') return;
+  const items = r.items || [];
+  setRows(items.map(s => txt(s.name) + ((s.fav === 1 || s.fav === true) ? '   *' : '')),
+    items, 'No series here. Open a category and hold OK on a series to add it to My Series.');
+}
+
+function epLabel(it) {
+  let lab = `S${it.season} E${it.ep}   ${it.title}`;
+  const saved = readVodPos(it.id);
+  if (saved > 5) lab += '   (resume ' + fmtDur(saved) + ')';
+  if (it.watched === 1 || it.watched === true) lab += '   (Watched)';
+  return lab;
+}
+
+function onSeriesEps(r) {
+  hideLoading();
+  if (S.mode !== 'serieseps') return;
+  const items = (r.items || []).map(e => ({
+    id: e.vid, season: e.season, ep: e.ep, title: txt(e.title), watched: e.watched,
+    plot: txt(e.plot), kind: 'episode',
+    name: txt(r.name) + ' - S' + e.season + 'E' + e.ep + ' ' + txt(e.title),
+  }));
+  setRows(items.map(epLabel), items, 'Could not load episodes for this series.');
 }
 function onRecordings(r) {
   if (S.mode !== 'recordings') return;
@@ -981,6 +1070,30 @@ function applyOverlayTab(idx) {
         });
       });
     });
+  } else if (t === 'Series') {
+    api('/series/groups', r => {
+      if (!S.overlay) return;
+      const cats = r.items || [];
+      overlayList(cats.map(g => g.favs ? 'My Series   (' + g.count + ')' : (txt(g.name) || '(no category)') + '   (' + g.count + ')'), cats, i => {
+        const q = cats[i].favs ? 'fav=1' : 'group=' + urlEnc(txt(cats[i].name));
+        api('/series?' + q, r2 => {
+          if (!S.overlay) return;
+          const srs = r2.items || [];
+          overlayList(srs.map(s => txt(s.name)), srs, j => {
+            api(`/series/${srs[j].id}/episodes`, r3 => {
+              if (!S.overlay) return;
+              const eps = (r3.items || []).map(e => ({
+                id: e.vid, kind: 'episode',
+                name: txt(r3.name) + ' - S' + e.season + 'E' + e.ep + ' ' + txt(e.title),
+                label: `S${e.season} E${e.ep}   ${txt(e.title)}` +
+                  ((e.watched === 1 || e.watched === true) ? '   (Watched)' : ''),
+              }));
+              overlayList(eps.map(e => e.label), eps, k => { hideOverlay(); selectVodItem(eps[k]); });
+            });
+          });
+        });
+      });
+    });
   } else if (t === 'Recordings') {
     api('/recordings', r => {
       if (!S.overlay) return;
@@ -1087,6 +1200,20 @@ function optionsAction() {
     storeDel('vpos_' + it.id);
     api('/vod?group=' + urlEnc(S.vodGroup || ''), onVodList);
     toast('Resume point cleared');
+  } else if (S.mode === 'serieslist') {
+    api(`/series/${it.id}/fav`, r => {
+      if (!r.ok) return;
+      toast(r.fav ? 'Added ' + txt(it.name) + ' to My Series' : 'Removed ' + txt(it.name) + ' from My Series');
+      api('/series?' + S.seriesListQ, onSeriesList);
+    }, 'POST', '{}');
+  } else if (S.mode === 'serieseps') {
+    const w = (it.watched === 1 || it.watched === true) ? 0 : 1;
+    api(`/series/ep/${it.id}/watched?watched=${w}`, r => {
+      if (!r.ok) return;
+      if (w === 1) storeDel('vpos_' + it.id);
+      api(`/series/${S.seriesId}/episodes`, onSeriesEps);
+      toast(w ? 'Marked watched' : 'Marked unwatched');
+    }, 'POST', '{}');
   } else if (S.mode === 'recent') {
     removeRecentFocused();
   } else if (S.mode === 'teams' && S.contentIdx > 0) {
