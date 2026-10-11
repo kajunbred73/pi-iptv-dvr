@@ -963,30 +963,22 @@ def live_file(cid, fname):
 
 @app.get("/api/recordings/<int:rid>/trickplay.bif")
 def recording_bif(rid):
-    """Seek-bar thumbnail archive (FF/RW previews) built from the muxed segments.
-
-    Covers live timeshift buffers and saved recordings alike - both are the
-    same recordings-dir playlist. Building runs in the background; the first
-    request waits a few seconds for the earliest batch instead of 404ing, and
-    the file keeps growing coverage as more segments are thumbed."""
+    """Seek-bar thumbnail archive (FF/RW previews) for a finished recording."""
     rec = db.row("SELECT path FROM recordings WHERE id=?", (rid,)) or abort(404)
-    d = os.path.join(config.get("recordings_dir"), rec["path"])
-    thumbs.ensure_bif(d, os.path.join(d, "index.m3u8"))
-    bif = thumbs.wait_for(d)
-    if not bif:
-        abort(404)
-    resp = send_from_directory(d, "trickplay.bif", conditional=False)
-    resp.headers["Cache-Control"] = "no-cache"
-    return resp
+    return _bif_response(os.path.join(config.get("recordings_dir"), rec["path"]))
 
 
 @app.get("/api/vod/<int:vid>/trickplay.bif")
 def vod_bif(vid):
     s = streamer.vod.touch(vid)
-    d = s.dir if s else os.path.join(config.get("vod_dir"), str(vid))
-    thumbs.ensure_bif(d, os.path.join(d, "index.m3u8"))
-    bif = thumbs.wait_for(d)
-    if not bif:
+    return _bif_response(s.dir if s else os.path.join(config.get("vod_dir"), str(vid)))
+
+
+def _bif_response(d):
+    """Never blocks: 404 (Roku falls back to plain trick play) unless the content
+    is finished and its BIF is fully built; a missing one is built in the background."""
+    pl = os.path.join(d, "index.m3u8")
+    if not thumbs.complete(pl) or not thumbs.ensure_bif(d, pl):
         abort(404)
     resp = send_from_directory(d, "trickplay.bif", conditional=False)
     resp.headers["Cache-Control"] = "no-cache"

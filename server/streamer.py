@@ -11,6 +11,7 @@ import urllib.request
 
 import config
 import db
+import thumbs
 
 log = logging.getLogger("streamer")
 
@@ -564,6 +565,9 @@ class Recorder:
         db.execute("UPDATE recordings SET status=?, size_bytes=?, stop=? WHERE id=?", (status, size, int(time.time()), rid))
         if sid is not None:
             db.execute("UPDATE schedules SET status=? WHERE id=? AND status != 'cancelled'", (status, sid))
+        if ok and not rec["title"].startswith("[timeshift] "):
+            # Build FF/RW thumbnails now (idle priority) so the first playback has them.
+            thumbs.ensure_bif(out_dir, os.path.join(out_dir, "index.m3u8"))
 
     def cancel(self, sid):
         db.execute("UPDATE schedules SET status='cancelled' WHERE id=? AND status IN ('scheduled','recording')", (sid,))
