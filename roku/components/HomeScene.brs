@@ -110,6 +110,7 @@ sub init()
     m.resumeTitle = ""
     m.resumeLive = false
     m.resumePos = 0
+    m.resumeActions = []
 
     m.reg = CreateObject("roRegistrySection", "piiptv")
     m.appBuild = "?"
@@ -510,7 +511,7 @@ sub onContentSelected()
         m.recordingId = it.id
         isLive = (it.status = "recording")
         saved = readResumePos(it.id)
-        if saved > 5 and not isLive
+        if isLive or saved > 5
             showResumeDialog(it.stream_url, it.title, isLive, saved, it.id)
         else
             play(it.stream_url, it.title, isLive)
@@ -1627,7 +1628,23 @@ sub showResumeDialog(url as String, title as String, isLive as Boolean, resumeFr
     d = CreateObject("roSGNode", "Dialog")
     d.title = "Resume viewing?"
     d.message = "Resume from " + fmtDuration(resumeFrom) + " or start over?"
-    d.buttons = ["Resume", "Start over"]
+    btns = ["Resume", "Start over"]
+    m.resumeActions = ["resume", "start"]
+    if isLive
+        ' Still recording: also offer the live edge.
+        d.title = "Still recording"
+        if resumeFrom > 5
+            d.message = "Resume from " + fmtDuration(resumeFrom) + ", start over, or watch live?"
+        else
+            btns = ["Start over"]
+            m.resumeActions = ["start"]
+            d.message = "Start from the beginning or watch live?"
+        end if
+        btns.push("Watch live")
+        m.resumeActions.push("live")
+    end if
+    ' Node array fields are copies when read, so build the list before assigning.
+    d.buttons = btns
     d.addField("resume", "boolean", false)
     d.resume = true
     d.observeField("buttonSelected", "onResumeDialog")
@@ -1644,8 +1661,11 @@ sub onResumeDialog(ev as Object)
         m.resumeIsVod = false
         return
     end if
+    act = m.resumeActions[idx]
     startPos = 0
-    if idx = 0 then startPos = m.resumePos
+    if act = "resume" then startPos = m.resumePos
+    ' -1: seek to the live edge once the player knows the buffer's length.
+    if act = "live" then startPos = -1
     if m.resumeIsVod
         m.resumeIsVod = false
         vodPlayStart(startPos)
@@ -2177,6 +2197,10 @@ sub onVideoState()
         if m.startPos > 0
             m.video.seek = m.startPos
             m.startPos = 0
+        else if m.startPos < 0
+            m.startPos = 0
+            dur = m.video.duration
+            if dur <> invalid and dur > 20 then m.video.seek = dur - 10
         end if
         m.retryCount = 0
         m.retrying = false
