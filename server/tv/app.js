@@ -8,7 +8,7 @@ const S = {
   server: storeGet('server') || (location.protocol.startsWith('http') ? location.origin : ''),
   tabs: ['Favorites', 'Guide', 'Recent', 'Search', 'Categories', 'Movies', 'Series',
          'Sports Teams', 'Recordings', 'Scheduled', 'Settings'],
-  mode: 'grid',          // grid | list | categories | vodcats | vodlist | recent | teams | recordings | scheduled | settings
+  mode: 'grid',          // grid | list | categories | vodcats | vodlist | recent | teams | recordings | scheduled | settings | pistatus | sysupdate | seriescats | serieslist | serieseps
   items: [], contentIdx: 0,
   menuIdx: 0, menuFocus: 0,
   focus: 'menu',         // menu | content | grid | video | dialog | menubar
@@ -21,7 +21,7 @@ const S = {
   streamUrl: '', playTitle: '', isLive: false, startPos: 0,
   retryCount: 0, autoRetunes: 0, finishPos: 0, lastSegs: 0, lastErr: '',
   pendingChannel: null, playChannel: null,
-  readyTimer: null, retryTimer: null, statusTimer: null, playTimer: null,
+  readyTimer: null, retryTimer: null, statusTimer: null, playTimer: null, updTimer: null,
   dialogCb: null, dialogBtnIdx: 0,
   hls: null, enterDownAt: 0, enterRepeat: false,
 };
@@ -376,14 +376,39 @@ function selectFocused() {
     case 'settings': {
       const key = it;
       if (key === 'server') promptServer();
+      else if (key === 'health') showPiStatus();
+      else if (key === 'sysupdate') startSysUpdate();
+      else if (key === 'rokupass') {
+        inputDialog('Roku dev-mode password (needed to sideload app updates; empty clears it)', '', v => {
+          v ? storeSet('roku_pass', v) : storeDel('roku_pass');
+          renderSettings();
+        });
+      }
       else if (key === 'refresh') { toast('Refreshing on server...'); api('/refresh', () => toast('Refresh started'), 'POST', '{}'); }
       else if (key === 'vodclear') {
         let n = 0;
         for (const k of storeKeys()) if (k.startsWith('vpos_')) { storeDel(k); n++; }
         toast(`Cleared ${n} saved movie position(s)`);
       }
+      else if (key === 'restart') {
+        confirmBox('Restart the Pi server? Streams stop and it takes ~10 seconds to come back.', () => {
+          api('/restart', () => {
+            toast('Pi server restarting - back in about 10 seconds');
+            setTimeout(loadStatus, 8000);
+          }, 'POST', '{}');
+        });
+      }
+      else if (key === 'admin') {
+        const w = window.open('/', '_blank');
+        if (!w) location.href = '/';
+      }
       break;
     }
+    case 'pistatus':
+      showPiStatus();
+      break;
+    case 'sysupdate':
+      break;   // rows refresh themselves while the update runs
   }
 }
 
@@ -1028,9 +1053,131 @@ function renderSettings() {
   const rows = [];
   const keys = [];
   if (!location.protocol.startsWith('http')) { rows.push('Server address: ' + (S.server || '(not set)')); keys.push('server'); }
-  rows.push('Refresh playlist and guide on server', 'Clear all movie resume marks', 'Version 1.1 (TV)');
-  keys.push('refresh', 'vodclear', 'version');
+  rows.push(
+    'Pi server status and health',
+    'System update (Pi software + Roku app)',
+    'Roku dev password (for sideloading updates): ' + (storeGet('roku_pass', '') ? 'set' : 'not set'),
+    'Refresh playlist and guide on server',
+    'Clear all movie resume marks',
+    'Restart the Pi server',
+    'Open Pi admin page (provider, channel groups, URLs)',
+    'Version 1.1 (TV)');
+  keys.push('health', 'sysupdate', 'rokupass', 'refresh', 'vodclear', 'restart', 'admin', 'version');
   setRows(rows, keys);
+}
+
+// ---------------------------------------------------------------- pi status / system update
+
+// Raw fetch that reports errors through the callback - api() swallows failures
+// into a toast, but the update/restart flows need to know when the Pi drops
+// off the network (that's the expected state mid-restart).
+function fetchJson(path, cb) {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), 6000);
+  fetch(S.server + '/api' + path, { signal: ctrl.signal })
+    .then(r => r.json()).then(j => cb(j, null))
+    .catch(e => cb(null, e))
+    .finally(() => clearTimeout(to));
+}
+
+function showPiStatus() {
+  S.mode = 'pistatus';
+  $('heading').textContent = 'Pi server status';
+  setHint('OK: refresh   Back: menu');
+  showLoading('Loading status...');
+  api('/status', r => {
+    hideLoading();
+    if (S.mode !== 'pistatus') return;
+    const lines = piStatusLines(r);
+    setRows(lines, lines.map(() => 'reload'));
+  });
+}
+
+function piStatusLines(r) {
+  const L = [];
+  L.push('Uptime: ' + fmtDur(r.uptime_s));
+  L.push(`Channels: ${r.channels} enabled / ${r.channels_total} total in ${r.groups_enabled} groups`);
+  L.push('Guide programs: ' + (r.programs || 0));
+  L.push('Recordings stored: ' + (r.recordings || 0));
+  if (r.disk_free_mb != null) L.push('Disk free: ' + fmtSize(r.disk_free_mb * 1048576));
+  let conn = txt(r.conn_in_use);
+  if (r.conn_limit != null) conn += `  (provider allows ${r.conn_limit})`;
+  L.push('Provider streams in use: ' + conn);
+  const lives = (r.live_sessions || []).length;
+  L.push(`Live buffers: ${lives}   Recording now: ${r.recording_now}   Scheduled: ${r.scheduled}`);
+  const p = r.provider || {};
+  if (p.host) {
+    L.push(`Provider (${p.host}): ` +
+      (p.ok === true ? `up, ${p.ms} ms` : p.ok === false ? 'NOT answering' : 'not checked yet'));
+  }
+  if (r.m3u_last) L.push('Playlist imported: ' + fmtDay(r.m3u_last) + ' ' + fmtTime(r.m3u_last));
+  if (r.epg_last) L.push('Guide updated: ' + fmtDay(r.epg_last) + ' ' + fmtTime(r.epg_last));
+  const imp = r.import;
+  if (imp) {
+    if (imp.running) L.push('Import: running now (' + txt(imp.step) + ')');
+    const res = imp.result;
+    if (res) {
+      if (res.channels != null) L.push(`Last import: ${res.channels} channels, ${res.programs} programs`);
+      if (res.movies != null || res.series != null) L.push(`Catalogs: ${res.movies} movies, ${res.series} series`);
+      for (const k of ['channels_error', 'programs_error', 'catalog_error', 'movies_error', 'series_error'])
+        if (res[k]) L.push('Last import ' + k + ': ' + String(res[k]).slice(0, 80));
+    }
+  }
+  return L;
+}
+
+function startSysUpdate() {
+  confirmBox('Update everything? The Pi pulls the newest code, rebuilds and sideloads the Roku app, then restarts (~1-2 min). Playback stops.', () => {
+    const body = {};
+    const pw = storeGet('roku_pass', '');
+    if (pw) body.roku_pass = pw;   // omit when unset - an empty string would wipe the Pi's saved password
+    S.mode = 'sysupdate';
+    $('heading').textContent = 'System update';
+    setHint('Updating - leave this page open   Back: menu');
+    setRows(['Starting update...'], ['-']);
+    api('/system/update', () => {}, 'POST', JSON.stringify(body));
+    pollSysUpdate();
+  });
+}
+
+function pollSysUpdate() {
+  clearTimeout(S.updTimer);
+  if (S.mode !== 'sysupdate') return;
+  fetchJson('/system/update/status', (r, err) => {
+    if (S.mode !== 'sysupdate') return;
+    // The API going quiet mid-update = the restart phase already kicked in.
+    if (err || !r || r.phase == null) { waitForServer(0); return; }
+    const lines = ['Phase: ' + txt(r.phase)];
+    (r.log || []).slice(-12).forEach(l => lines.push(l));
+    if (r.phase === 'failed') lines.push(' ', 'Update failed - see the log above.');
+    if (r.phase === 'restart') lines.push(' ', 'Server restarting - waiting for it to come back...');
+    setRows(lines, lines.map(() => '-'));
+    if (r.phase === 'failed') { setHint('Update failed   Back: menu'); return; }
+    if (r.phase === 'restart') { waitForServer(0); return; }
+    S.updTimer = setTimeout(pollSysUpdate, 2000);
+  });
+}
+
+function waitForServer(n) {
+  if (S.mode !== 'sysupdate') return;
+  if (n > 60) {
+    setRows(['The Pi did not come back after ~3 minutes.', 'Check it: sudo systemctl status pi-iptv-dvr'], ['-', '-']);
+    setHint('Back: menu');
+    return;
+  }
+  fetchJson('/status', (r, err) => {
+    if (S.mode !== 'sysupdate') return;
+    if (!err && r && r.ok) {
+      toast('Update complete - the Pi is back');
+      loadStatus();
+      S.mode = 'settings';
+      $('heading').textContent = 'Settings';
+      setHint('');
+      renderSettings();
+    } else {
+      S.updTimer = setTimeout(() => waitForServer(n + 1), 3000);
+    }
+  });
 }
 function promptServer() {
   inputDialog('Pi address (e.g. http://192.168.1.50:8080)', S.server, v => {
