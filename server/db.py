@@ -109,7 +109,8 @@ CREATE TABLE IF NOT EXISTS episode_watched (
 CREATE TABLE IF NOT EXISTS series_favs (
     series_id INTEGER PRIMARY KEY,  -- provider's series id; a separate table so
                                     -- catalog reimports (DELETE FROM series) keep it
-    added INTEGER
+    added INTEGER,
+    fav_order INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -151,6 +152,14 @@ def init():
     # NOT in SCHEMA: it runs before this ALTER on older databases, so an index
     # on the not-yet-existing column fails and takes init() down with it.
     conn().execute("CREATE INDEX IF NOT EXISTS idx_ser_eps_epid ON series_episodes(ep_id)")
+    fcols = [r["name"] for r in conn().execute("PRAGMA table_info(series_favs)")]
+    if "fav_order" not in fcols:
+        conn().execute("ALTER TABLE series_favs ADD COLUMN fav_order INTEGER DEFAULT 0")
+        # Seed order by when each series was added so existing favorites keep it.
+        for i, r in enumerate(conn().execute(
+                "SELECT series_id FROM series_favs ORDER BY added, series_id")):
+            conn().execute("UPDATE series_favs SET fav_order=? WHERE series_id=?",
+                           (i + 1, r["series_id"]))
     conn().commit()
 
 

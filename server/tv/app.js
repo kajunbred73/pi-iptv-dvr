@@ -284,7 +284,7 @@ function updateDetail() {
     } else if (S.mode === 'categories') d = txt(it.count) + ' channels';
     else if (S.mode === 'vodcats') d = txt(it.count) + ' movies';
     else if (S.mode === 'vodlist') d = txt(it.grp);
-    else if (S.mode === 'seriescats') d = it.favs ? 'Series you added' : txt(it.count) + ' series';
+    else if (S.mode === 'seriescats') d = it.search ? 'Search all series by name' : it.favs ? 'Series you added' : txt(it.count) + ' series';
     else if (S.mode === 'serieslist') d = txt(it.grp);
     else if (S.mode === 'serieseps') d = txt(it.plot);
     else if (S.mode === 'recent') d = it.kind === 'movie' ? 'Movie' : txt(it.title);
@@ -318,12 +318,22 @@ function selectFocused() {
       selectVodItem(it);
       break;
     case 'seriescats':
-      if (it.favs) {
+      if (it.search) {
+        inputDialog('Search series', '', q => {
+          if (!q) return;
+          S.seriesGroup = '';
+          S.seriesListQ = 'q=' + urlEnc(q);
+          S.mode = 'serieslist';
+          $('heading').textContent = "Series: '" + q + "'";
+          setHint('OK: open series   hold OK: add to My Series   Back: menu');
+          api('/series?' + S.seriesListQ, onSeriesList);
+        });
+      } else if (it.favs) {
         S.seriesGroup = '__favs__';
         S.seriesListQ = 'fav=1';
         S.mode = 'serieslist';
         $('heading').textContent = 'My Series';
-        setHint('OK: open series   hold OK: remove from My Series   Back: menu');
+        setHint('OK: open series   hold OK: remove   Mouse: drag to reorder   Back: menu');
         api('/series?fav=1', onSeriesList);
       } else {
         S.seriesGroup = txt(it.name);
@@ -769,9 +779,9 @@ function onVodList(r) {
 
 function onSeriesGroups(r) {
   if (S.mode !== 'seriescats' && !S.overlay) return;
-  const items = r.items || [];
-  setRows(items.map(g => g.favs
-    ? 'My Series   (' + txt(g.count) + ')'
+  const items = [{ search: true, name: '', count: 0 }].concat(r.items || []);
+  setRows(items.map(g => g.search ? 'Search series...'
+    : g.favs ? 'My Series   (' + txt(g.count) + ')'
     : (txt(g.name) || '(no category)') + '   (' + txt(g.count) + ')'),
     items, 'No series found. Try Refresh playlist and guide on server from Settings.');
 }
@@ -781,6 +791,20 @@ function onSeriesList(r) {
   const items = r.items || [];
   setRows(items.map(s => txt(s.name) + ((s.fav === 1 || s.fav === true) ? '   *' : '')),
     items, 'No series here. Open a category and hold OK on a series to add it to My Series.');
+  document.querySelectorAll('#content .row').forEach((el, i) => {
+    // Clickable star on the right of each row - mouse users shouldn't need
+    // hold-OK to star a series.
+    const st = document.createElement('span');
+    st.className = 'favstar' + ((items[i].fav === 1 || items[i].fav === true) ? ' on' : '');
+    st.dataset.i = i;
+    st.textContent = (items[i].fav === 1 || items[i].fav === true) ? '★' : '☆';
+    el.appendChild(st);
+    // My Series rows are draggable to reorder, like the favorites grid.
+    if (S.seriesGroup === '__favs__' && items[i].id != null) {
+      el.draggable = true;
+      el.classList.add('serdrag');
+    }
+  });
 }
 
 function epLabel(it) {
@@ -1419,6 +1443,17 @@ document.addEventListener('click', e => {
   const orow = t.closest('#overlay-pane .row');
   if (orow) { ovIdx = +orow.dataset.i; if (ovSelect) ovSelect(ovIdx); return; }
 
+  const st = t.closest('.favstar');
+  if (st && S.mode === 'serieslist') {
+    const it = S.items[+st.dataset.i];
+    if (it && it.id != null) api(`/series/${it.id}/fav`, r => {
+      if (!r.ok) return;
+      toast(r.fav ? 'Added ' + txt(it.name) + ' to My Series' : 'Removed ' + txt(it.name) + ' from My Series');
+      api('/series?' + S.seriesListQ, onSeriesList);
+    }, 'POST', '{}');
+    return;
+  }
+
   const crow = t.closest('#content .row');
   if (crow) {
     S.contentIdx = +crow.dataset.i;
@@ -1476,6 +1511,50 @@ document.addEventListener('drop', e => {
     JSON.stringify({ channel_id: moved.id, [d.after ? 'after' : 'before']: ref.id }));
 });
 document.addEventListener('dragend', () => { dragRi = -1; clearDropMarks(); });
+
+// Mouse: drag a series row inside "My Series" to reorder it.
+// Same before/after protocol as /api/favorites/move, resolved by local row id.
+let serDrag = -1;
+function clearSerDropMarks() {
+  document.querySelectorAll('#content .row.drop-above, #content .row.drop-below')
+    .forEach(g => g.classList.remove('drop-above', 'drop-below'));
+}
+function serDropSpot(e) {
+  if (serDrag < 0 || S.mode !== 'serieslist' || S.seriesGroup !== '__favs__') return null;
+  const row = e.target.closest && e.target.closest('#content .row');
+  if (!row) return null;
+  const b = row.getBoundingClientRect();
+  return { row, i: +row.dataset.i, after: e.clientY > b.top + b.height / 2 };
+}
+document.addEventListener('dragstart', e => {
+  const r = e.target.closest && e.target.closest('#content .row.serdrag');
+  if (!r) return;
+  serDrag = +r.dataset.i;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', r.dataset.i);
+});
+document.addEventListener('dragover', e => {
+  const d = serDropSpot(e);
+  if (!d) return;
+  e.preventDefault();
+  clearSerDropMarks();
+  if (d.i !== serDrag) d.row.classList.add(d.after ? 'drop-below' : 'drop-above');
+});
+document.addEventListener('drop', e => {
+  const d = serDropSpot(e);
+  clearSerDropMarks();
+  if (!d) return;
+  e.preventDefault();
+  const from = serDrag;
+  serDrag = -1;
+  if (d.i === from) return;
+  const moved = S.items[from], ref = S.items[d.i];
+  api('/series/favs/move', r => {
+    toast(r.ok ? 'Moved ' + txt(moved.name) : 'Could not move series');
+    api('/series?fav=1', onSeriesList);
+  }, 'POST', JSON.stringify({ sid: moved.id, [d.after ? 'after' : 'before']: ref.id }));
+});
+document.addEventListener('dragend', () => { serDrag = -1; clearSerDropMarks(); });
 
 // Trap the browser Back button (what the TV remote's Back sends in browser
 // mode) so it acts as in-app Back instead of navigating away from the page.

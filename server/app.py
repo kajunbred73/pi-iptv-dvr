@@ -705,10 +705,12 @@ def api_series():
     if request.args.get("fav"):
         clauses.append("sf.series_id IS NOT NULL")
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    # My Series uses the user's drag order; every other view is alphabetical.
+    order = "sf.fav_order, s.name" if request.args.get("fav") else "s.name"
     return jsonify(db.rows(
         "SELECT s.id, s.name, s.logo, s.grp, (sf.series_id IS NOT NULL) AS fav "
         "FROM series s LEFT JOIN series_favs sf ON sf.series_id = s.series_id "
-        f"{where} ORDER BY s.name LIMIT 500", args))
+        f"{where} ORDER BY {order} LIMIT 500", args))
 
 
 @app.post("/api/series/<int:sid>/fav")
@@ -721,10 +723,58 @@ def api_series_fav(sid):
         c.execute("DELETE FROM series_favs WHERE series_id=?", (s["series_id"],))
         c.commit()
         return jsonify({"ok": True, "fav": 0})
-    c.execute("INSERT OR REPLACE INTO series_favs(series_id, added) VALUES(?,?)",
+    c.execute("INSERT OR REPLACE INTO series_favs(series_id, added, fav_order) "
+              "VALUES(?,?,(SELECT COALESCE(MAX(fav_order),0)+1 FROM series_favs))",
               (s["series_id"], int(time.time())))
     c.commit()
     return jsonify({"ok": True, "fav": 1})
+
+
+@app.post("/api/series/favs/move")
+def api_serfavs_move():
+    """Rearrange My Series: {"sid": N, "before"|"after": other_series_row_id}
+    or {"sid": N, "dir": "up"|"down"|"top"|"bottom"}. sids are the client-facing
+    series row ids; ordering lives on series_favs.fav_order keyed by provider id."""
+    body = request.get_json(force=True, silent=True) or {}
+    sid = int(body.get("sid") or 0)
+    s = db.row("SELECT series_id FROM series WHERE id=?", (sid,)) or abort(404)
+    psid = s["series_id"]
+    ids = [r["series_id"] for r in db.rows(
+        "SELECT sf.series_id FROM series_favs sf "
+        "JOIN series s ON s.series_id = sf.series_id "
+        "ORDER BY sf.fav_order, s.name")]
+    if psid not in ids:
+        abort(404)
+    old = ids.index(psid)
+    ids.pop(old)
+    ref_key = "before" if "before" in body else "after" if "after" in body else None
+    if ref_key:
+        ref_row = db.row("SELECT series_id FROM series WHERE id=?",
+                         (int(body.get(ref_key) or 0),)) or abort(404)
+        ref = ref_row["series_id"]
+        if ref == psid:
+            return jsonify({"ok": True, "position": old})
+        if ref not in ids:
+            abort(404)
+        new = ids.index(ref) + (1 if ref_key == "after" else 0)
+    else:
+        action = body.get("dir")
+        if action == "up":
+            new = max(0, old - 1)
+        elif action == "down":
+            new = min(len(ids), old + 1)
+        elif action == "top":
+            new = 0
+        elif action == "bottom":
+            new = len(ids)
+        else:
+            abort(400, "need before/after or dir up|down|top|bottom")
+    ids.insert(new, psid)
+    c = db.conn()
+    for k, ps in enumerate(ids):
+        c.execute("UPDATE series_favs SET fav_order=? WHERE series_id=?", (k + 1, ps))
+    c.commit()
+    return jsonify({"ok": True, "position": new})
 
 
 def _series_episodes(s):

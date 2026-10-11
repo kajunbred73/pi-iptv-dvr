@@ -102,3 +102,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0e14; c
 .gchan[draggable="true"] { cursor: grab; }
 #grid .grow.drop-above { box-shadow: inset 0 3px 0 #4da3ff; }
 #grid .grow.drop-below { box-shadow: inset 0 -3px 0 #4da3ff; }
+
+/* series rows: clickable star + drag-to-reorder (My Series) */
+.favstar { float: right; margin-left: 16px; font-size: 30px; line-height: 1.1;
+  color: #6b7488; cursor: pointer; }
+.favstar.on { color: #ffd75e; }
+.row.serdrag { cursor: grab; }
+#content .row.drop-above { box-shadow: inset 0 3px 0 #4da3ff; }
+#content .row.drop-below { box-shadow: inset 0 -3px 0 #4da3ff; }
