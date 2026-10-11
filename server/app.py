@@ -737,7 +737,7 @@ def _series_episodes(s):
     eps = db.rows("SELECT * FROM series_episodes WHERE series_id=? "
                   "ORDER BY season, ep", (s["series_id"],))
     fetched = int(db.get_meta("ser_eps:" + str(s["series_id"])) or 0)
-    if eps and _now() - fetched < 86400:
+    if eps and eps[0].get("ep_id") is not None and _now() - fetched < 86400:
         return eps
     host, user, pw = (config.get(k) for k in ("xtream_host", "xtream_user", "xtream_pass"))
     try:
@@ -755,19 +755,22 @@ def _series_episodes(s):
         except (TypeError, ValueError):
             sn = 0
         for e in elist or []:
+            ep_id = e.get("id")
+            if ep_id is None:
+                continue  # no provider id -> can't build a stream URL anyway
             ext = e.get("container_extension") or "mp4"
-            ep_url = f"{host}/series/{quote(user)}/{quote(pw)}/{e.get('id')}.{ext}"
+            ep_url = f"{host}/series/{quote(user)}/{quote(pw)}/{ep_id}.{ext}"
             try:
                 epn = int(e.get("episode_num") or 0)
             except (TypeError, ValueError):
                 epn = 0
-            rows.append((s["series_id"], sn, epn, e.get("title") or "",
+            rows.append((s["series_id"], ep_id, sn, epn, e.get("title") or "",
                          ep_url, ((e.get("info") or {}).get("plot") or "")))
     if rows:
         c = db.conn()
         c.execute("DELETE FROM series_episodes WHERE series_id=?", (s["series_id"],))
         c.executemany("INSERT OR REPLACE INTO series_episodes"
-                      "(series_id, season, ep, title, url, plot) VALUES(?,?,?,?,?,?)", rows)
+                      "(series_id, ep_id, season, ep, title, url, plot) VALUES(?,?,?,?,?,?,?)", rows)
         c.commit()
         db.set_meta("ser_eps:" + str(s["series_id"]), _now())
         eps = db.rows("SELECT * FROM series_episodes WHERE series_id=? "
@@ -778,16 +781,57 @@ def _series_episodes(s):
 @app.get("/api/series/<int:sid>/episodes")
 def api_series_episodes(sid):
     s = db.row("SELECT * FROM series WHERE id=?", (sid,)) or abort(404)
-    eps = _series_episodes(s)
+    _series_episodes(s)  # populate the cache if needed
+    eps = db.rows("SELECT e.*, (w.ep_id IS NOT NULL) AS watched "
+                  "FROM series_episodes e "
+                  "LEFT JOIN episode_watched w ON w.ep_id = e.ep_id "
+                  "WHERE e.series_id=? ORDER BY e.season, e.ep", (s["series_id"],))
     return jsonify({"ok": True, "name": s["name"], "items": [
-        {"vid": _EP_VID + e["id"], "season": e["season"], "ep": e["ep"],
-         "title": e["title"], "plot": e["plot"] or ""} for e in eps]})
+        {"vid": _EP_VID + int(e["ep_id"]), "season": e["season"], "ep": e["ep"],
+         "title": e["title"], "plot": e["plot"] or "",
+         "watched": e["watched"]} for e in eps]})
+
+
+@app.post("/api/series/ep/<int:epvid>/watched")
+def api_ep_watched(epvid):
+    """Set/unset an episode's Watched flag. epvid is the playback vid
+    (1.5e9 + provider episode id), which is stable across episode refetches."""
+    ep_id = epvid - _EP_VID
+    watched = request.args.get("watched", "1") not in ("0", "false")
+    c = db.conn()
+    if watched:
+        c.execute("INSERT OR REPLACE INTO episode_watched(ep_id, watched_at) "
+                  "VALUES(?,?)", (ep_id, int(time.time())))
+    else:
+        c.execute("DELETE FROM episode_watched WHERE ep_id=?", (ep_id,))
+    c.commit()
+    return jsonify({"ok": True, "watched": 1 if watched else 0, "epvid": epvid})
+
+
+@app.get("/api/series/ep/<int:epvid>/next")
+def api_ep_next(epvid):
+    """The next episode in the series after epvid (for autoplay-on-finish)."""
+    ep_id = epvid - _EP_VID
+    e = db.row("SELECT * FROM series_episodes WHERE ep_id=? LIMIT 1", (ep_id,)) or abort(404)
+    nxt = db.row("SELECT * FROM series_episodes WHERE series_id=? "
+                 "AND (season > ? OR (season = ? AND ep > ?)) "
+                 "ORDER BY season, ep LIMIT 1",
+                 (e["series_id"], e["season"], e["season"], e["ep"]))
+    if not nxt:
+        return jsonify({"ok": True, "next": None})
+    sr = db.row("SELECT name FROM series WHERE series_id=?", (e["series_id"],))
+    title = nxt["title"] or f"Season {nxt['season']} Episode {nxt['ep']}"
+    name = f"{sr['name']} - S{nxt['season']:02d}E{nxt['ep']:02d}" if sr else title
+    return jsonify({"ok": True, "next": {
+        "vid": _EP_VID + int(nxt["ep_id"]), "name": name,
+        "season": nxt["season"], "ep": nxt["ep"], "title": nxt["title"] or ""}})
 
 
 def _vod_movie(vid):
     """A vod row, or a series episode under its high-offset vid namespace."""
     if vid >= _EP_VID:
-        e = db.row("SELECT * FROM series_episodes WHERE id=?", (vid - _EP_VID,)) or abort(404)
+        e = db.row("SELECT * FROM series_episodes WHERE ep_id=? LIMIT 1",
+                   (vid - _EP_VID,)) or abort(404)
         sr = db.row("SELECT name FROM series WHERE series_id=?", (e["series_id"],))
         title = e["title"] or f"Season {e['season']} Episode {e['ep']}"
         name = f"{sr['name']} - S{e['season']:02d}E{e['ep']:02d}" if sr else title

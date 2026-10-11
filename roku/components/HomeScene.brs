@@ -529,7 +529,7 @@ sub onContentSelected()
         m.seriesName = txt(it.name)
         m.mode = "serieseps"
         m.heading.text = txt(it.name)
-        m.hint.text = "OK: play episode   *: clear resume   Back: series list"
+        m.hint.text = "OK: play episode   *: mark/unmark watched   Back: series list"
         showLoading("Loading episodes...")
         api("/series/" + it.id.toStr() + "/episodes", "serieseps")
     else if m.mode = "serieseps"
@@ -982,8 +982,11 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             else if m.mode = "teams"
                 deleteTeamFocused()
                 return true
-            else if m.mode = "vodlist" or m.mode = "serieseps"
+            else if m.mode = "vodlist"
                 clearVodResume()
+                return true
+            else if m.mode = "serieseps"
+                toggleEpWatched()
                 return true
             else if m.mode = "serieslist"
                 toggleSeriesFav()
@@ -1144,6 +1147,26 @@ sub toggleSeriesFav()
     if i < 0 or i >= m.items.count() then return
     m.serFavIdx = i
     api("/series/" + m.items[i].id.toStr() + "/fav", "serfav", "POST", "")
+end sub
+
+function epLabel(it as Object) as String
+    lab = "S" + it.season.toStr() + " E" + it.ep.toStr() + "   " + txt(it.title)
+    saved = readVodPos(it.id)
+    if saved > 5 then lab = lab + "   (resume " + fmtDuration(saved) + ")"
+    if it.watched = 1 or it.watched = true then lab = lab + "   (Watched)"
+    return lab
+end function
+
+' * key on an episode: toggle its Watched flag. Marking watched also clears
+' any saved resume position (handled in the epwatched response).
+sub toggleEpWatched()
+    i = m.content.itemFocused
+    if i < 0 or i >= m.items.count() then return
+    it = m.items[i]
+    if it.id = invalid then return
+    w = "1"
+    if it.watched = 1 or it.watched = true then w = "0"
+    api("/series/ep/" + it.id.toStr() + "/watched?watched=" + w, "epwatched", "POST", "")
 end sub
 
 ' The Pi only remuxes, so an HEVC movie on a Roku without an HEVC decoder can't play.
@@ -2418,7 +2441,7 @@ sub onApiError(ev as Object)
     ' Drop errors from a superseded request and free the finished task node.
     if m.tasks[t.tag] = invalid or not m.tasks[t.tag].isSameNode(t) then return
     m.tasks.delete(t.tag)
-    if t.tag = "touch" or t.tag = "vodinfo" or t.tag = "tsstop" or t.tag = "vodstop" then return
+    if t.tag = "touch" or t.tag = "vodinfo" or t.tag = "tsstop" or t.tag = "vodstop" or t.tag = "epwatched" or t.tag = "epnext" then return
     if t.tag = "teams"
         renderTeams()   ' offline: show the registry cache
         return
@@ -2615,6 +2638,12 @@ sub onApiResponse(ev as Object)
             ' played through to it. If nothing ever played, ended/silent-exit just
             ' drops to the menu with no explanation - report it instead.
             if (r.ended = true or r.ended = 1) and (m.seenPlaying or m.finishPos > 30)
+                if m.vodKind = "episode"
+                    ' Episode finished: mark it watched and ask the Pi for the
+                    ' next one; epnext starts it (or leaves us at the list).
+                    api("/series/ep/" + m.vodId.toStr() + "/watched?watched=1", "epwatched", "POST", "")
+                    api("/series/ep/" + m.vodId.toStr() + "/next", "epnext")
+                end if
                 stopVideo(true, true)
             else
                 hint = ""
@@ -2772,12 +2801,11 @@ sub onApiResponse(ev as Object)
         labels = []
         items = []
         for each e in r.items
-            lab = "S" + e.season.toStr() + " E" + e.ep.toStr() + "   " + txt(e.title)
-            saved = readVodPos(e.vid)
-            if saved > 5 then lab = lab + "   (resume " + fmtDuration(saved) + ")"
-            labels.push(lab)
-            items.push({ id: e.vid, plot: txt(e.plot), kind: "episode",
-                name: txt(r.name) + " - S" + e.season.toStr() + "E" + e.ep.toStr() + " " + txt(e.title) })
+            it = { id: e.vid, season: e.season, ep: e.ep, title: txt(e.title),
+                   watched: e.watched, plot: txt(e.plot), kind: "episode",
+                   name: txt(r.name) + " - S" + e.season.toStr() + "E" + e.ep.toStr() + " " + txt(e.title) }
+            items.push(it)
+            labels.push(epLabel(it))
         end for
         setRows(labels, items, "Could not load episodes for this series.")
     else if tag = "serfav"
@@ -2807,6 +2835,35 @@ sub onApiResponse(ev as Object)
                     end if
                 end if
             end if
+        end if
+    else if tag = "epwatched"
+        if r.ok = true or r.ok = 1
+            ' A watched episode shouldn't offer "resume at the end" - drop the mark.
+            if r.watched = 1 or r.watched = "1"
+                m.reg.delete("vpos_" + r.epvid.toStr())
+                m.reg.flush()
+            end if
+            ' Refresh the row's (Watched) badge if the episodes list is on screen.
+            if m.mode = "serieseps"
+                for i = 0 to m.items.count() - 1
+                    if m.items[i].id = r.epvid
+                        m.items[i].watched = r.watched
+                        node = m.content.content.getChild(i)
+                        if node <> invalid then node.title = epLabel(m.items[i])
+                        exit for
+                    end if
+                end for
+            end if
+        end if
+    else if tag = "epnext"
+        ' Autoplay: fired when an episode reached its real end.
+        if (r.ok = true or r.ok = 1) and r.next <> invalid
+            toast("Next: " + txt(r.next.name))
+            m.vodId = r.next.vid
+            m.vodKind = "episode"
+            m.playTitle = txt(r.next.name)
+            m.vodCodec = ""
+            vodPlayStart(0)
         end if
     else if tag = "cw"
         ' Continue Watching: stash the recordings list and re-render Recent so the

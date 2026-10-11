@@ -91,6 +91,7 @@ CREATE INDEX IF NOT EXISTS idx_series_grp ON series(grp);
 CREATE TABLE IF NOT EXISTS series_episodes (
     id INTEGER PRIMARY KEY,
     series_id INTEGER NOT NULL,   -- provider's series id (stable across catalog reimports)
+    ep_id INTEGER,                -- provider's episode id; playback/resume/watched keys
     season INTEGER,
     ep INTEGER,
     title TEXT,
@@ -99,6 +100,12 @@ CREATE TABLE IF NOT EXISTS series_episodes (
     UNIQUE(series_id, season, ep)
 );
 CREATE INDEX IF NOT EXISTS idx_ser_eps ON series_episodes(series_id);
+CREATE INDEX IF NOT EXISTS idx_ser_eps_epid ON series_episodes(ep_id);
+
+CREATE TABLE IF NOT EXISTS episode_watched (
+    ep_id INTEGER PRIMARY KEY,    -- provider's episode id, stable across episode refetches
+    watched_at INTEGER
+);
 
 CREATE TABLE IF NOT EXISTS series_favs (
     series_id INTEGER PRIMARY KEY,  -- provider's series id; a separate table so
@@ -135,6 +142,14 @@ def init():
         for i, r in enumerate(conn().execute(
                 "SELECT id FROM channels WHERE favorite=1 ORDER BY num, name")):
             conn().execute("UPDATE channels SET fav_order=? WHERE id=?", (i + 1, r["id"]))
+    ecols = [r["name"] for r in conn().execute("PRAGMA table_info(series_episodes)")]
+    if "ep_id" not in ecols:
+        conn().execute("ALTER TABLE series_episodes ADD COLUMN ep_id INTEGER")
+        conn().execute("CREATE INDEX IF NOT EXISTS idx_ser_eps_epid ON series_episodes(ep_id)")
+        # Rows cached before ep_id existed are useless for playback keys (their
+        # rowids change on every refetch) - drop them so each series refetches.
+        conn().execute("DELETE FROM series_episodes")
+        conn().execute("DELETE FROM meta WHERE key LIKE 'ser_eps:%'")
     conn().commit()
 
 
