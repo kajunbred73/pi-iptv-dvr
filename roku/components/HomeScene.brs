@@ -51,6 +51,8 @@ sub init()
     m.zapLabel = m.top.findNode("zapLabel")
     m.zapTimer = m.top.findNode("zapTimer")
     m.zapTimer.observeField("fire", "onZapTimer")
+    m.updateTimer = m.top.findNode("updateTimer")
+    m.updateTimer.observeField("fire", "onUpdatePoll")
 
     m.items = []          ' data rows backing the content list
     m.mode = "grid"       ' grid | list | categories | recordings | scheduled | settings
@@ -113,6 +115,9 @@ sub init()
     m.appBuild = "?"
     ai = CreateObject("roAppInfo")
     if ai <> invalid then m.appBuild = ai.GetValue("build_version")
+    m.rokuPass = ""
+    if m.reg.exists("roku_pass") then m.rokuPass = m.reg.read("roku_pass")
+    m.updatePhase = ""
     ' HD-only models (e.g. Roku Express) have no HEVC decoder.
     cd = CreateObject("roDeviceInfo").CanDecodeVideo({ Codec: "hevc" })
     m.canHevc = (cd <> invalid and cd.result = true)
@@ -237,7 +242,7 @@ sub api(path as String, tag as String, method = "GET" as String, body = "" as St
         ' second means no answer ever lands when the Pi is busy - the ready check
         ' would spin forever and its timeout (which counts responses) never trips.
         ' Skipping this tick is safe: the pending request carries the same query.
-        if tag = "readycheck" or tag = "rejoin" or tag = "touch" or tag = "status" then return
+        if tag = "readycheck" or tag = "rejoin" or tag = "touch" or tag = "status" or tag = "sysupdate" then return
         old.control = "stop"
         m.tasks.delete(tag)
     end if
@@ -368,7 +373,7 @@ sub loadGrid()
 end sub
 
 sub showSettings()
-    setRows(["Server address: " + m.server, "Server status and health", "Refresh playlist and guide on server", "Clear all movie resume marks", "Restart the Pi server", "Version 1.1 build " + txt(m.appBuild)], ["server", "health", "refresh", "vodclear", "restart", "version"])
+    setRows(["Server address: " + m.server, "System update (Pi software + this app)", "Server status and health", "Refresh playlist and guide on server", "Clear all movie resume marks", "Restart the Pi server", "Version 1.1 build " + txt(m.appBuild)], ["server", "sysupdate", "health", "refresh", "vodclear", "restart", "version"])
 end sub
 
 sub onHealthDialog(ev as Object)
@@ -515,6 +520,12 @@ sub onContentSelected()
     else if m.mode = "settings"
         if it = "server"
             promptServer()
+        else if it = "sysupdate"
+            if m.rokuPass = ""
+                promptRokuPass()
+            else
+                confirm("Update everything? The Pi pulls the newest code, rebuilds and reinstalls this app, then restarts (~1-2 min). Playback stops.", "sysupdate", {})
+            end if
         else if it = "health"
             api("/status", "health")
         else if it = "refresh"
@@ -940,7 +951,55 @@ sub onConfirm(ev as Object)
         api("/recordings/" + txt(p.id), "delete_ok", "DELETE", "")
     else if d.action = "restart"
         api("/restart", "restart_ok", "POST", "{}")
+    else if d.action = "sysupdate"
+        startSystemUpdate()
     end if
+end sub
+
+' One-tap full update: the Pi pulls the newest code, rebuilds the channel
+' package, sideloads it to every configured Roku, and restarts its service.
+' The dev-mode password is needed for the sideload (set when enabling dev
+' mode); asked once and kept in the registry.
+sub promptRokuPass()
+    k = CreateObject("roSGNode", "KeyboardDialog")
+    k.title = "Roku developer password"
+    k.message = "The password you set when enabling developer mode on this Roku (needed to install the update)."
+    k.text = ""
+    k.buttons = ["Save", "Cancel"]
+    k.observeField("buttonSelected", "onRokuPassEntered")
+    m.top.dialog = k
+end sub
+
+sub onRokuPassEntered(ev as Object)
+    k = ev.getRoSGNode()
+    if ev.getData() = 0
+        m.rokuPass = k.text
+        m.reg.write("roku_pass", m.rokuPass)
+        m.reg.flush()
+        confirm("Update everything? The Pi pulls the newest code, rebuilds and reinstalls this app, then restarts (~1-2 min). Playback stops.", "sysupdate", {})
+    end if
+    k.close = true
+end sub
+
+function myIp() as String
+    addrs = CreateObject("roDeviceInfo").GetIPAddrs()
+    if addrs = invalid then return ""
+    for each ip in addrs
+        if ip <> "" and Left(ip, 4) <> "127." then return ip
+    end for
+    return ""
+end function
+
+sub startSystemUpdate()
+    body = { roku_ip: myIp(), roku_pass: m.rokuPass }
+    m.updatePhase = ""
+    showLoading("Starting update...")
+    api("/system/update", "sysupdate", "POST", FormatJson(body))
+    m.updateTimer.control = "start"
+end sub
+
+sub onUpdatePoll()
+    api("/system/update/status", "sysupdate")
 end sub
 
 sub promptVodSearch()
@@ -2222,6 +2281,16 @@ sub onApiError(ev as Object)
         toast("Teams saved on this Roku only - the Pi did not answer")
         return
     end if
+    if t.tag = "sysupdate" and m.updatePhase = "restart"
+        ' Expected: the Pi just restarted its own service - stop polling, the
+        ' sideloaded app is about to replace this one anyway.
+        m.updateTimer.control = "stop"
+        if m.top.dialog <> invalid and m.top.dialog.loading = true
+            m.top.dialog.title = "Pi is restarting"
+            m.top.dialog.message = "Reopen the app if it does not relaunch by itself."
+        end if
+        return
+    end if
     if t.tag = "timeshift" or t.tag = "readycheck" or t.tag = "rejoin" or t.tag = "vodplay" or t.tag = "vodrejoin"
         m.readyTimer.control = "stop"
         playError("The Pi did not answer " + t.url + Chr(10) + t.error + Chr(10) + "If this says HTTP 404, the Pi is running old server code: cd pi-iptv-dvr && git pull && sudo systemctl restart pi-iptv-dvr")
@@ -2735,5 +2804,37 @@ sub onApiResponse(ev as Object)
         loadStatus()
     else if tag = "restart_ok"
         toast("Pi server restarting - back in about 10 seconds")
+    else if tag = "sysupdate"
+        if r.phase = invalid then return   ' the kickoff ack; the polls carry state
+        m.updatePhase = txt(r.phase)
+        line = ""
+        if r.log <> invalid and r.log.count() > 0 then line = txt(r.log[r.log.count() - 1])
+        if m.top.dialog <> invalid and m.top.dialog.loading = true
+            m.top.dialog.title = "Update: " + txt(r.phase)
+            m.top.dialog.message = line
+        end if
+        if r.ok = true
+            ' The sideload replaces this app mid-update; whatever we show next may
+            ' be the last thing it renders. Tell the user what to expect.
+            m.updateTimer.control = "stop"
+            hideLoading()
+            d = CreateObject("roSGNode", "Dialog")
+            d.title = "Update installed"
+            d.message = "The app will close and reinstall itself - reopen it from the home screen if it does not come back. The Pi restarts right after." + Chr(10) + line
+            d.buttons = ["OK"]
+            d.observeField("buttonSelected", "onErrorDialog")
+            m.top.dialog = d
+        else if r.ok = false
+            m.updateTimer.control = "stop"
+            tail = ""
+            if r.log <> invalid
+                n = r.log.count()
+                for i = n - 1 to 0 step -1
+                    if n - i > 5 then exit for
+                    tail = txt(r.log[i]) + Chr(10) + tail
+                end for
+            end if
+            playError("The update failed:" + Chr(10) + tail)
+        end if
     end if
 end sub

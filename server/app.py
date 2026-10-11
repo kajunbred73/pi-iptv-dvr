@@ -5,9 +5,11 @@ import os
 import re
 import shutil
 import socket
+import subprocess
 import threading
 import time
 import urllib.request
+import zipfile
 
 from urllib.parse import quote
 
@@ -828,6 +830,114 @@ def api_restart():
         os._exit(0)
     threading.Thread(target=_bye, daemon=True).start()
     return jsonify({"ok": True, "restarting": True})
+
+
+# ---------------------------------------------------------------- system update
+
+_REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_UPDATE = {"phase": "idle", "log": [], "ok": None, "ts": 0.0}
+_update_lock = threading.Lock()
+
+
+def _update_log(text):
+    for line in str(text).splitlines():
+        if line.strip():
+            _UPDATE["log"].append(line.strip())
+    _UPDATE["log"] = _UPDATE["log"][-40:]
+
+
+def _zip_roku(out_path):
+    """Same package scripts/roku-deploy.sh builds, but via zipfile so the
+    update works even on a Pi without the 'zip' package installed."""
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    if os.path.exists(out_path):
+        os.remove(out_path)
+    src = os.path.join(_REPO_DIR, "roku")
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for root, _dirs, files in os.walk(src):
+            for f in files:
+                p = os.path.join(root, f)
+                z.write(p, os.path.relpath(p, src))
+
+
+def _roku_install(zip_path, ip, pw):
+    """POST the package to the Roku's dev-mode installer; returns (ok, message)."""
+    try:
+        r = subprocess.run(
+            ["curl", "-sS", "--digest", "-u", f"rokudev:{pw}",
+             "-F", "mysubmit=Install", "-F", f"archive=@{zip_path}",
+             "--max-time", "30", f"http://{ip}/plugin_install"],
+            capture_output=True, text=True, timeout=40)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"install failed: {e}"
+    body = r.stdout or ""
+    if "Install Success" in body or "Identical" in body:
+        return True, "installed"
+    m = re.search(r"(Failed[^<]*|Error[^<]*)", body)
+    if m:
+        return False, m.group(1).strip()
+    return False, (r.stderr.strip() or "no answer - is it powered on / in dev mode?")
+
+
+def _system_update(extra_ip=""):
+    """git pull -> rebuild the Roku package -> sideload it -> restart the service.
+
+    Runs in a thread; progress is polled via /api/system/update/status. The
+    restart goes through the same streamer.shutdown + os._exit path as
+    /api/restart (systemd Restart=always reloads the pulled code)."""
+    _UPDATE.update(phase="pull", ok=None, ts=time.time(), log=[])
+    try:
+        r = subprocess.run(["git", "pull", "--ff-only"], cwd=_REPO_DIR,
+                           capture_output=True, text=True, timeout=90)
+        _update_log(r.stdout or r.stderr)
+        if r.returncode != 0:
+            raise RuntimeError("git pull failed - the Pi's checkout may have local edits")
+        _UPDATE["phase"] = "build"
+        zp = os.path.join(_REPO_DIR, "dist", "pi-iptv-dvr.zip")
+        _zip_roku(zp)
+        _update_log("Built " + os.path.basename(zp))
+        ips = [x.strip() for x in (config.get("roku_ip") or "").split(",") if x.strip()]
+        if extra_ip and extra_ip not in ips:
+            ips.insert(0, extra_ip)   # the device that asked, even if unconfigured
+        if ips:
+            _UPDATE["phase"] = "install"
+            for ip in ips:
+                ok, msg = _roku_install(zp, ip, config.get("roku_pass") or "")
+                _update_log(f"Roku {ip}: {msg}")
+        else:
+            _update_log("No Roku IPs configured - skipped the sideload")
+        _UPDATE["phase"] = "restart"
+        _UPDATE["ok"] = True
+        _update_log("Restarting the Pi service...")
+        def _bye():
+            time.sleep(2)
+            streamer.shutdown()
+            os._exit(0)
+        threading.Thread(target=_bye, daemon=True).start()
+    except Exception as e:
+        _UPDATE["phase"] = "failed"
+        _UPDATE["ok"] = False
+        _UPDATE["log"].append(str(e))
+
+
+@app.post("/api/system/update")
+def api_system_update():
+    """Kick a full system update (Pi code + Roku sideload + service restart)."""
+    body = request.get_json(silent=True) or {}
+    # The Roku sends its dev password once; persist it for one-tap updates later.
+    if body.get("roku_pass") is not None and body["roku_pass"] != config.get("roku_pass"):
+        config.save({"roku_pass": body["roku_pass"]})
+    with _update_lock:
+        busy = _UPDATE["phase"] in ("pull", "build", "install", "restart")
+        if not busy:
+            threading.Thread(target=_system_update, args=(body.get("roku_ip") or "",),
+                             daemon=True).start()
+    return jsonify({"ok": True, "started": not busy})
+
+
+@app.get("/api/system/update/status")
+def api_system_update_status():
+    return jsonify(_UPDATE)
 
 
 @app.get("/api/import-status")

@@ -33,6 +33,7 @@ DEFAULTS = {
     "audio_mode": "auto",            # auto: copy AAC-LC/HE-AAC audio, re-encode the rest
                                      # copy: never re-encode | aac: always re-encode
     "roku_ip": "",                   # Roku IP(s), comma-separated - autolaunch the app when one boots
+    "roku_pass": "",                 # dev-mode password - sideload updates via the dev installer
 }
 
 _lock = threading.Lock()

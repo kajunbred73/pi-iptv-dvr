@@ -36,5 +36,6 @@
     <Timer id="sleepTimer" repeat="false" duration="3600" />
     <Timer id="zapTimer" repeat="false" duration="1.6" />
     <Timer id="nowBarTimer" repeat="false" duration="7" />
+    <Timer id="updateTimer" repeat="true" duration="2" />
   </children>
 </component>
