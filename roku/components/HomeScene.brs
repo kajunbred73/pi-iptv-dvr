@@ -1219,6 +1219,23 @@ end sub
 
 ' ------------------------------------------------------------------ playback
 
+' BIF thumbnail archive on the Pi (built from the muxed segments) - gives the
+' built-in seek bar image previews during FF/RW on movies, recordings and live
+' buffers. Missing file falls back to time-based trick play, so always safe.
+function bifUrl() as String
+    if m.vodId >= 0 then return m.server + "/api/vod/" + m.vodId.toStr() + "/trickplay.bif"
+    if m.recordingId >= 0 then return m.server + "/api/recordings/" + m.recordingId.toStr() + "/trickplay.bif"
+    return ""
+end function
+
+sub setTrickPlay(c as Object)
+    bf = bifUrl()
+    if bf = "" then return
+    c.sdbifurl = bf
+    c.hdbifurl = bf
+    c.fhdbifurl = bf
+end sub
+
 sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     m.playTitle = title
     m.streamUrl = url
@@ -1262,6 +1279,7 @@ sub play(url as String, title as String, isLive as Boolean, startPos = 0)
     ' "finished" the instant it stalled. VOD mode plays from position 0, gives the
     ' seek slider the whole buffer, and keeps re-fetching until ENDLIST.
     c.live = false
+    setTrickPlay(c)
     m.video.content = c
     m.video.loop = false
     m.video.visible = true
@@ -1288,6 +1306,7 @@ sub rejoinLive()
     c.title = m.playTitle
     c.streamFormat = "hls"
     c.live = false
+    setTrickPlay(c)
     if resumePos >= 0
         c.playStart = resumePos
     else if dur <> invalid and dur > 15

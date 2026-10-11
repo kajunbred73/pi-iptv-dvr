@@ -17,6 +17,7 @@ import config
 import db
 import playlist
 import streamer
+import thumbs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("app")
@@ -846,6 +847,38 @@ def live_file(cid, fname):
     else:
         s = streamer.live.touch(cid) or abort(404)
     resp = send_from_directory(s.dir, fname, conditional=False)
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.get("/api/recordings/<int:rid>/trickplay.bif")
+def recording_bif(rid):
+    """Seek-bar thumbnail archive (FF/RW previews) built from the muxed segments.
+
+    Covers live timeshift buffers and saved recordings alike - both are the
+    same recordings-dir playlist. Building runs in the background; the first
+    request waits a few seconds for the earliest batch instead of 404ing, and
+    the file keeps growing coverage as more segments are thumbed."""
+    rec = db.row("SELECT path FROM recordings WHERE id=?", (rid,)) or abort(404)
+    d = os.path.join(config.get("recordings_dir"), rec["path"])
+    thumbs.ensure_bif(d, os.path.join(d, "index.m3u8"))
+    bif = thumbs.wait_for(d)
+    if not bif:
+        abort(404)
+    resp = send_from_directory(d, "trickplay.bif", conditional=False)
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.get("/api/vod/<int:vid>/trickplay.bif")
+def vod_bif(vid):
+    s = streamer.vod.touch(vid)
+    d = s.dir if s else os.path.join(config.get("vod_dir"), str(vid))
+    thumbs.ensure_bif(d, os.path.join(d, "index.m3u8"))
+    bif = thumbs.wait_for(d)
+    if not bif:
+        abort(404)
+    resp = send_from_directory(d, "trickplay.bif", conditional=False)
     resp.headers["Cache-Control"] = "no-cache"
     return resp
 
