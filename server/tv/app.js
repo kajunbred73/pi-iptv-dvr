@@ -962,10 +962,12 @@ function seriesRecordMenu(p) {
               if (i === 0) api('/series-rules/' + r.id, () => {
                 toast('Series recording removed');
                 if (S.mode === 'scheduled') loadScheduled();
+                if (S.mode === 'grid') loadGrid();
               }, 'DELETE');
             });
         } else {
           toast('Series set to record - ' + (r.scheduled || 0) + ' upcoming airing(s) queued');
+          if (S.mode === 'grid') loadGrid();   // show [REC] marks like a manual Record does
         }
       }, 'POST', JSON.stringify({ channel_id: p.channel_id, title: txt(p.title), new_only: idx === 1 }));
     });

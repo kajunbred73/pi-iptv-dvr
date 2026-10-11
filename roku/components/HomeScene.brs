@@ -3013,10 +3013,14 @@ sub onApiResponse(ev as Object)
             confirm("'" + txt(m.pendingRuleTitle) + "' is already set to record. Stop the series pass and cancel its upcoming recordings?", "delseries", { id: r.id })
         else
             toast("Series set to record - " + txt(r.scheduled) + " airing(s) queued")
+            ' The pass queued airings that may sit inside the loaded guide
+            ' window - refresh so their [REC] marks appear like a manual Record.
+            if m.mode = "grid" then loadGrid()
             if m.mode = "scheduled" then loadScheduled()
         end if
     else if tag = "serrule_del"
         toast("Series recording removed")
+        if m.mode = "grid" then loadGrid()
         if m.mode = "scheduled" then loadScheduled()
     else if tag = "scheduled_ok"
         if txt(r.warning) <> ""
