@@ -22,7 +22,7 @@ const S = {
   retryCount: 0, autoRetunes: 0, finishPos: 0, lastSegs: 0, lastErr: '',
   pendingChannel: null, playChannel: null,
   readyTimer: null, retryTimer: null, statusTimer: null, playTimer: null, updTimer: null,
-  dialogCb: null, dialogBtnIdx: 0,
+  dialogCb: null, dialogBtnIdx: 0, schedItems: null, schedRules: null,
   hls: null, enterDownAt: 0, enterRepeat: false,
 };
 
@@ -140,7 +140,7 @@ function showTab(idx) {
   else if (t === 'Series') { S.mode = 'seriescats'; setHint('OK: open category'); api('/series/groups', onSeriesGroups); }
   else if (t === 'Sports Teams') { S.mode = 'teams'; setHint('OK: team options   hold OK: add team'); renderTeams(); }
   else if (t === 'Recordings') { S.mode = 'recordings'; setHint('OK: play   hold OK: delete'); api('/recordings', onRecordings); }
-  else if (t === 'Scheduled') { S.mode = 'scheduled'; setHint('OK: cancel recording'); api('/schedules', onSchedules); }
+  else if (t === 'Scheduled') { S.mode = 'scheduled'; setHint('OK: cancel recording / stop a series'); loadScheduled(); }
   else if (t === 'Settings') { S.mode = 'settings'; setHint(''); renderSettings(); }
 }
 
@@ -290,7 +290,7 @@ function updateDetail() {
     else if (S.mode === 'recent') d = it.kind === 'movie' ? 'Movie' : txt(it.title);
     else if (S.mode === 'recordings') d = txt(it.description);
     else if (S.mode === 'teams') d = txt(it.name);
-    else if (S.mode === 'scheduled') d = fmtDay(it.start) + ' ' + fmtTime(it.start) + ' - ' + fmtTime(it.stop);
+    else if (S.mode === 'scheduled') d = it.kind === 'rule' ? 'Series pass - records every matching airing' : fmtDay(it.start) + ' ' + fmtTime(it.start) + ' - ' + fmtTime(it.stop);
   }
   setDetail(d);
 }
@@ -370,8 +370,13 @@ function selectFocused() {
       break;
     }
     case 'scheduled':
-      confirmBox(`Cancel recording '${txt(it.title)}'?`, () =>
-        api('/schedules/' + it.id, onScheduleCancel, 'DELETE'));
+      if (it.kind === 'rule') {
+        confirmBox(`Stop recording the series '${txt(it.title)}'? Its upcoming recordings will be cancelled.`, () =>
+          api('/series-rules/' + it.id, () => { toast('Series recording removed'); loadScheduled(); }, 'DELETE'));
+      } else {
+        confirmBox(`Cancel recording '${txt(it.title)}'?`, () =>
+          api('/schedules/' + it.id, onScheduleCancel, 'DELETE'));
+      }
       break;
     case 'settings': {
       const key = it;
@@ -862,14 +867,28 @@ function onRecordings(r) {
       '   (' + fmtDur(rec.duration) + ', ' + txt(rec.channel_name) + ', ' + fmtSize(rec.size_bytes) + ')' + tag;
   }), items, 'No recordings yet. Pick a show in the Guide and choose Record.');
 }
-function onSchedules(r) {
-  if (S.mode !== 'scheduled') return;
-  const items = r.items || [];
-  setRows(items.map(s => fmtDay(s.start) + ' ' + fmtTime(s.start) + '   ' + txt(s.title) +
-    '   (' + txt(s.channel_name) + ')' + (s.status === 'recording' ? '  [RECORDING]' : '')),
-    items, 'Nothing scheduled.');
+function loadScheduled() {
+  S.schedItems = null; S.schedRules = null;
+  api('/schedules', r => { S.schedItems = r.items || []; renderScheduled(); });
+  api('/series-rules', r => { S.schedRules = r.items || []; renderScheduled(); });
 }
-function onScheduleCancel() { toast('Recording cancelled'); if (S.mode === 'scheduled') api('/schedules', onSchedules); }
+function renderScheduled() {
+  if (S.mode !== 'scheduled' || S.schedItems == null || S.schedRules == null) return;
+  const labels = [], items = [];
+  for (const rule of S.schedRules) {
+    labels.push(`SERIES   ${txt(rule.match_title)}   (${rule.channel_name ? txt(rule.channel_name) : 'any channel'})` +
+      `   ${rule.upcoming} upcoming` + (rule.new_only ? '   [new only]' : ''));
+    items.push({ kind: 'rule', id: rule.id, title: rule.match_title });
+  }
+  for (const s of S.schedItems) {
+    labels.push(fmtDay(s.start) + ' ' + fmtTime(s.start) + '   ' + txt(s.title) +
+      '   (' + txt(s.channel_name) + ')' + (s.status === 'recording' ? '  [RECORDING]' : '') +
+      (s.rule_id ? '   [SERIES]' : ''));
+    items.push(s);
+  }
+  setRows(labels, items, 'Nothing scheduled.');
+}
+function onScheduleCancel() { toast('Recording cancelled'); if (S.mode === 'scheduled') loadScheduled(); }
 
 function promptSearch() {
   inputDialog('Search channels and shows', '', q => { if (q) { S.mode = 'list'; S.contentIdx = 0; searchFor(q); S.focus = 'content'; } });
@@ -914,14 +933,36 @@ function channelMenu(ch) {
 
 function programMenu(p) {
   const btns = [p.now_playing ? 'Watch now' : 'Watch channel now',
-    p.scheduled ? 'Cancel recording' : 'Record', 'Close'];
+    p.scheduled ? 'Cancel recording' : 'Record', 'Record series...', 'Close'];
   showMsg(txt(p.title), txt(p.channel_name) + '   ' + fmtDay(p.start) + ' ' + fmtTime(p.start) + ' - ' + fmtTime(p.stop), btns, idx => {
     if (idx === 0) playChannel({ id: p.channel_id, name: p.channel_name });
     else if (idx === 1) {
       if (p.scheduled) api(`/schedules/by-program?channel_id=${p.channel_id}&start=${p.start}`, onScheduleCancel, 'DELETE');
       else api('/schedules', () => toast('Recording scheduled'), 'POST', JSON.stringify({ channel_id: p.channel_id, program_start: p.start }));
     }
+    else if (idx === 2) seriesRecordMenu(p);
   });
+}
+
+function seriesRecordMenu(p) {
+  showMsg("Record series '" + txt(p.title) + "'",
+    'Record every airing of this show on ' + txt(p.channel_name) + '? New episodes are queued automatically as the guide updates.',
+    ['Every airing', 'New episodes only', 'Cancel'], idx => {
+      if (idx < 0 || idx > 1) return;
+      api('/series-rules', r => {
+        if (r.existing) {
+          showMsg('Series already set', "This series is already set to record. Stop it and cancel its upcoming recordings?",
+            ['Stop recording this series', 'Keep it'], i => {
+              if (i === 0) api('/series-rules/' + r.id, () => {
+                toast('Series recording removed');
+                if (S.mode === 'scheduled') loadScheduled();
+              }, 'DELETE');
+            });
+        } else {
+          toast('Series set to record - ' + (r.scheduled || 0) + ' upcoming airing(s) queued');
+        }
+      }, 'POST', JSON.stringify({ channel_id: p.channel_id, title: txt(p.title), new_only: idx === 1 }));
+    });
 }
 
 // generic button dialog

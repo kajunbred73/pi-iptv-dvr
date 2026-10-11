@@ -353,8 +353,8 @@ sub showTab(idx as Integer)
         api("/recordings", "recordings")
     else if tabName = "Scheduled"
         m.mode = "scheduled"
-        m.hint.text = "OK: cancel recording"
-        api("/schedules", "schedules")
+        m.hint.text = "OK: cancel recording / stop a series"
+        loadScheduled()
     else if tabName = "Settings"
         m.mode = "settings"
         m.hint.text = ""
@@ -562,7 +562,11 @@ sub onContentSelected()
             play(it.stream_url, it.title, isLive)
         end if
     else if m.mode = "scheduled"
-        confirm("Cancel recording '" + txt(it.title) + "'?", "cancel", { id: it.id })
+        if txt(it.kind) = "rule"
+            confirm("Stop recording the series '" + txt(it.title) + "'? Its upcoming recordings will be cancelled.", "delseries", { id: it.id })
+        else
+            confirm("Cancel recording '" + txt(it.title) + "'?", "cancel", { id: it.id })
+        end if
     else if m.mode = "settings"
         if it = "server"
             promptServer()
@@ -1029,6 +1033,8 @@ sub onConfirm(ev as Object)
         api("/schedules/" + txt(p.id), "cancel_ok", "DELETE", "")
     else if d.action = "delete"
         api("/recordings/" + txt(p.id), "delete_ok", "DELETE", "")
+    else if d.action = "delseries"
+        api("/series-rules/" + txt(p.id), "serrule_del", "DELETE", "")
     else if d.action = "restart"
         api("/restart", "restart_ok", "POST", "{}")
     else if d.action = "sysupdate"
@@ -1974,6 +1980,8 @@ sub programMenu(p as Object)
         buttons.push("Record")
         actions.push("record")
     end if
+    buttons.push("Record series")
+    actions.push("series")
     buttons.push("Close")
     actions.push("close")
     d.buttons = buttons
@@ -1998,7 +2006,65 @@ sub onProgramMenu(ev as Object)
         api("/schedules", "scheduled_ok", "POST", FormatJson({ channel_id: p.channel_id, program_start: p.start }))
     else if action = "unschedule"
         api("/schedules/by-program?channel_id=" + txt(p.channel_id) + "&start=" + txt(p.start), "cancel_ok", "DELETE", "")
+    else if action = "series"
+        seriesRecordMenu(p)
     end if
+end sub
+
+' A "season pass": record every future airing of this title on the channel it
+' was picked from. The Pi queues new episodes after each guide import.
+sub seriesRecordMenu(p as Object)
+    d = CreateObject("roSGNode", "Dialog")
+    d.title = "Record series: " + txt(p.title)
+    d.message = "Record every airing of '" + txt(p.title) + "' on " + txt(p.channel_name) + "? New episodes are queued automatically as the guide updates."
+    d.buttons = ["Every airing", "New episodes only", "Cancel"]
+    d.addField("program", "assocarray", false)
+    d.program = p
+    d.observeField("buttonSelected", "onSeriesRecord")
+    m.top.dialog = d
+end sub
+
+sub onSeriesRecord(ev as Object)
+    d = ev.getRoSGNode()
+    d.close = true
+    idx = ev.getData()
+    if idx < 0 or idx > 1 then return
+    p = d.program
+    m.pendingRuleTitle = txt(p.title)
+    api("/series-rules", "serrule", "POST", FormatJson({ channel_id: p.channel_id, title: p.title, new_only: (idx = 1) }))
+end sub
+
+' Scheduled tab = series passes first, then upcoming recordings. Two fetches
+' land in either order; renderScheduled draws once both arrived.
+sub loadScheduled()
+    m.schedItems = invalid
+    m.schedRules = invalid
+    api("/schedules", "schedules")
+    api("/series-rules", "serrules")
+end sub
+
+sub renderScheduled()
+    if m.mode <> "scheduled" then return
+    if m.schedItems = invalid or m.schedRules = invalid then return
+    labels = []
+    items = []
+    for each rule in m.schedRules
+        chanName = txt(rule.channel_name)
+        if chanName = "" then chanName = "any channel"
+        lbl = "SERIES   " + txt(rule.match_title) + "   (" + chanName + ")   " + txt(rule.upcoming) + " upcoming"
+        if rule.new_only = 1 or rule.new_only = true then lbl = lbl + "   [new only]"
+        labels.push(lbl)
+        items.push({ kind: "rule", id: rule.id, title: rule.match_title })
+    end for
+    for each s in m.schedItems
+        tagTxt = ""
+        if s.status = "recording" then tagTxt = "  [RECORDING]"
+        ser = ""
+        if s.rule_id <> invalid then ser = "   [SERIES]"
+        labels.push(fmtDay(s.start) + " " + fmtTime(s.start) + "   " + txt(s.title) + "   (" + txt(s.channel_name) + ")" + tagTxt + ser)
+        items.push(s)
+    end for
+    setRows(labels, items, "Nothing scheduled.")
 end sub
 
 sub onSportsChannel(ev as Object)
@@ -2928,14 +2994,24 @@ sub onApiResponse(ev as Object)
         end for
         setRows(labels, r.items, "No recordings yet. Pick a show in the Guide and choose Record.")
     else if tag = "schedules"
-        if m.mode <> "scheduled" then return
-        labels = []
-        for each s in r.items
-            tagTxt = ""
-            if s.status = "recording" then tagTxt = "  [RECORDING]"
-            labels.push(fmtDay(s.start) + " " + fmtTime(s.start) + "   " + txt(s.title) + "   (" + txt(s.channel_name) + ")" + tagTxt)
-        end for
-        setRows(labels, r.items, "Nothing scheduled.")
+        m.schedItems = []
+        if r.items <> invalid then m.schedItems = r.items
+        renderScheduled()
+    else if tag = "serrules"
+        m.schedRules = []
+        if r.items <> invalid then m.schedRules = r.items
+        renderScheduled()
+    else if tag = "serrule"
+        if r.existing = true
+            ' Same channel+title already has a pass - offer to remove it.
+            confirm("'" + txt(m.pendingRuleTitle) + "' is already set to record. Stop the series pass and cancel its upcoming recordings?", "delseries", { id: r.id })
+        else
+            toast("Series set to record - " + txt(r.scheduled) + " airing(s) queued")
+            if m.mode = "scheduled" then loadScheduled()
+        end if
+    else if tag = "serrule_del"
+        toast("Series recording removed")
+        if m.mode = "scheduled" then loadScheduled()
     else if tag = "scheduled_ok"
         if txt(r.warning) <> ""
             ' Overlaps more recordings than the provider has streams - say so now
@@ -2954,7 +3030,7 @@ sub onApiResponse(ev as Object)
     else if tag = "cancel_ok"
         toast("Recording cancelled")
         if m.mode = "grid" then loadGrid()
-        if m.mode = "scheduled" then api("/schedules", "schedules")
+        if m.mode = "scheduled" then loadScheduled()
     else if tag = "teams"
         m.teams = []
         if r.teams <> invalid

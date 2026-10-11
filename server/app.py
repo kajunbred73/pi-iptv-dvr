@@ -484,6 +484,45 @@ def api_schedule_create():
     return jsonify({"ok": True, "id": sid, "warning": warn})
 
 
+@app.get("/api/series-rules")
+def api_series_rules():
+    return jsonify(db.rows(
+        "SELECT r.*, c.name AS channel_name, "
+        "(SELECT COUNT(*) FROM schedules s WHERE s.rule_id=r.id AND s.status='scheduled') AS upcoming "
+        "FROM series_rules r LEFT JOIN channels c ON c.id=r.channel_id ORDER BY r.match_title"))
+
+
+@app.post("/api/series-rules")
+def api_series_rule_create():
+    """Record every airing of a show title (a 'season pass'). channel_id pins the
+    rule to one channel; omit it to match the show on any enabled channel."""
+    body = request.get_json(force=True, silent=True) or request.form.to_dict()
+    title = (body.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    cid = body.get("channel_id")
+    cid = int(cid) if cid is not None else None
+    if cid is not None and not db.row("SELECT id FROM channels WHERE id=?", (cid,)):
+        return jsonify({"error": "unknown channel"}), 404
+    new_only = 1 if body.get("new_only") in (True, 1, "1", "true") else 0
+    dup = db.row("SELECT id FROM series_rules WHERE channel_id IS ? AND "
+                 "LOWER(TRIM(match_title))=LOWER(TRIM(?))", (cid, title))
+    if dup:
+        return jsonify({"ok": True, "id": dup["id"], "existing": True})
+    rid = db.execute("INSERT INTO series_rules(channel_id,match_title,new_only,created) VALUES(?,?,?,?)",
+                     (cid, title, new_only, _now()))
+    return jsonify({"ok": True, "id": rid, "scheduled": playlist.apply_series_rules()})
+
+
+@app.delete("/api/series-rules/<int:rid>")
+def api_series_rule_delete(rid):
+    # Cancel the rule's still-pending airings; recordings already done or in
+    # progress keep their schedule rows for history.
+    db.execute("UPDATE schedules SET status='cancelled' WHERE rule_id=? AND status='scheduled'", (rid,))
+    db.execute("DELETE FROM series_rules WHERE id=?", (rid,))
+    return jsonify({"ok": True})
+
+
 @app.post("/api/timeshift")
 def api_timeshift():
     """Start a live buffer recording for the current show on a channel."""

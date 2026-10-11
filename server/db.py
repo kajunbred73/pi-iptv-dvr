@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS programs (
     stop INTEGER NOT NULL,
     title TEXT,
     description TEXT,
-    category TEXT
+    category TEXT,
+    is_new INTEGER                 -- 1 when the XMLTV entry carries <new/>, else NULL
 );
 CREATE INDEX IF NOT EXISTS idx_programs_lookup ON programs(tvg_id, start);
 
@@ -46,6 +47,15 @@ CREATE TABLE IF NOT EXISTS schedules (
     stop INTEGER NOT NULL,
     status TEXT DEFAULT 'scheduled',   -- scheduled | recording | done | failed | cancelled
     recording_id INTEGER,
+    created INTEGER,
+    rule_id INTEGER                  -- set when a series_rules entry created this
+);
+
+CREATE TABLE IF NOT EXISTS series_rules (
+    id INTEGER PRIMARY KEY,
+    channel_id INTEGER,              -- NULL = match the show on any enabled channel
+    match_title TEXT NOT NULL,       -- program title, matched case-insensitive
+    new_only INTEGER DEFAULT 0,      -- 1 = only airings the EPG flags as new
     created INTEGER
 );
 
@@ -152,6 +162,12 @@ def init():
     # NOT in SCHEMA: it runs before this ALTER on older databases, so an index
     # on the not-yet-existing column fails and takes init() down with it.
     conn().execute("CREATE INDEX IF NOT EXISTS idx_ser_eps_epid ON series_episodes(ep_id)")
+    pcols = [r["name"] for r in conn().execute("PRAGMA table_info(programs)")]
+    if "is_new" not in pcols:
+        conn().execute("ALTER TABLE programs ADD COLUMN is_new INTEGER")
+    scols = [r["name"] for r in conn().execute("PRAGMA table_info(schedules)")]
+    if "rule_id" not in scols:
+        conn().execute("ALTER TABLE schedules ADD COLUMN rule_id INTEGER")
     fcols = [r["name"] for r in conn().execute("PRAGMA table_info(series_favs)")]
     if "fav_order" not in fcols:
         conn().execute("ALTER TABLE series_favs ADD COLUMN fav_order INTEGER DEFAULT 0")

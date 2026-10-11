@@ -363,6 +363,7 @@ def import_epg(url=None, max_days=3):
                         (el.findtext("title") or "").strip(),
                         (el.findtext("desc") or "").strip()[:1000],
                         (el.findtext("category") or "").strip(),
+                        1 if el.find("new") is not None else None,
                     ))
             el.clear()
             if len(rows) >= 2000:
@@ -375,7 +376,7 @@ def import_epg(url=None, max_days=3):
     try:
         c.execute("DELETE FROM programs")
         for i in range(0, len(rows), 2000):
-            c.executemany("INSERT INTO programs(tvg_id,start,stop,title,description,category) VALUES(?,?,?,?,?,?)",
+            c.executemany("INSERT INTO programs(tvg_id,start,stop,title,description,category,is_new) VALUES(?,?,?,?,?,?,?)",
                           rows[i:i + 2000])
         c.commit()
     except Exception:
@@ -387,6 +388,47 @@ def import_epg(url=None, max_days=3):
 
 
 # ---------------------------------------------------------------- orchestration
+
+def apply_series_rules():
+    """Queue schedules for future airings matching each series_rules row.
+
+    Runs after every guide import and when a rule is created, so episodes get
+    queued as soon as the guide learns about them. Any schedules row for the
+    same (channel_id, start) - in ANY status - blocks inserting, so a recording
+    the user cancelled is never resurrected by the next import. The recorder
+    adds the pre/post padding at dispatch, so programs store raw times."""
+    rules = db.rows("SELECT * FROM series_rules")
+    if not rules:
+        return 0
+    now = int(time.time())
+    # Only honor new_only when the provider actually flags <new/> episodes;
+    # otherwise the rule would quietly never record anything.
+    has_new_flags = db.row("SELECT 1 AS x FROM programs WHERE is_new=1 LIMIT 1") is not None
+    made = 0
+    for rule in rules:
+        sql = ("SELECT p.start, p.stop, p.title, c.id AS channel_id "
+               "FROM programs p JOIN channels c ON c.tvg_id = p.tvg_id "
+               "WHERE p.start > ? AND LOWER(TRIM(p.title)) = LOWER(TRIM(?))")
+        args = [now, rule["match_title"]]
+        if rule["channel_id"] is not None:
+            sql += " AND c.id=?"
+            args.append(rule["channel_id"])
+        else:
+            sql += " AND c.grp IN (SELECT name FROM groups WHERE enabled=1)"
+        if rule["new_only"] and has_new_flags:
+            sql += " AND p.is_new=1"
+        for p in db.rows(sql, args):
+            if db.row("SELECT id FROM schedules WHERE channel_id=? AND start=?",
+                      (p["channel_id"], p["start"])):
+                continue
+            db.execute("INSERT INTO schedules(channel_id,title,start,stop,status,created,rule_id) "
+                       "VALUES(?,?,?,?,'scheduled',?,?)",
+                       (p["channel_id"], p["title"], p["start"], p["stop"], now, rule["id"]))
+            made += 1
+    if made:
+        log.info("series rules queued %d recording(s)", made)
+    return made
+
 
 def refresh_all(epg_only=False):
     """Synchronous import of playlist then EPG. Returns a summary dict."""
@@ -414,6 +456,10 @@ def refresh_all(epg_only=False):
         except Exception as e:
             log.exception("epg import failed")
             result["programs_error"] = str(e)
+        try:
+            apply_series_rules()
+        except Exception:
+            log.exception("series rules apply failed")
     finally:
         state.update(running=False, step="", finished=int(time.time()), result=result)
         shutil.rmtree(os.path.join(config.DATA_DIR, "tmp"), ignore_errors=True)
