@@ -100,7 +100,6 @@ CREATE TABLE IF NOT EXISTS series_episodes (
     UNIQUE(series_id, season, ep)
 );
 CREATE INDEX IF NOT EXISTS idx_ser_eps ON series_episodes(series_id);
-CREATE INDEX IF NOT EXISTS idx_ser_eps_epid ON series_episodes(ep_id);
 
 CREATE TABLE IF NOT EXISTS episode_watched (
     ep_id INTEGER PRIMARY KEY,    -- provider's episode id, stable across episode refetches
@@ -145,11 +144,13 @@ def init():
     ecols = [r["name"] for r in conn().execute("PRAGMA table_info(series_episodes)")]
     if "ep_id" not in ecols:
         conn().execute("ALTER TABLE series_episodes ADD COLUMN ep_id INTEGER")
-        conn().execute("CREATE INDEX IF NOT EXISTS idx_ser_eps_epid ON series_episodes(ep_id)")
         # Rows cached before ep_id existed are useless for playback keys (their
         # rowids change on every refetch) - drop them so each series refetches.
         conn().execute("DELETE FROM series_episodes")
         conn().execute("DELETE FROM meta WHERE key LIKE 'ser_eps:%'")
+    # NOT in SCHEMA: it runs before this ALTER on older databases, so an index
+    # on the not-yet-existing column fails and takes init() down with it.
+    conn().execute("CREATE INDEX IF NOT EXISTS idx_ser_eps_epid ON series_episodes(ep_id)")
     conn().commit()
 
 
