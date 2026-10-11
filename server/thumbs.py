@@ -30,7 +30,7 @@ MAGIC = b"\x89BIF\r\n\x1a\n"
 TW, TH = 320, 240            # Roku "HD" bif thumbnail size
 SPACING = 10.0               # seconds of content per thumbnail
 MAX_THUMBS = 1200            # spacing widens if the content would exceed this
-BATCH = 40                   # segments per ffmpeg invocation
+BATCH = 8                    # segments per ffmpeg invocation (each -i is a decoder; the Pi 3 has 1 GB)
 REBUILD_GAP = 60             # rebuild once uncovered tail passes this many seconds
 
 _VF = ("scale=%d:%d:force_original_aspect_ratio=decrease,"
@@ -38,6 +38,7 @@ _VF = ("scale=%d:%d:force_original_aspect_ratio=decrease,"
 
 _lock = threading.Lock()
 _jobs = set()                # seg dirs with a builder thread running
+_one_build = threading.Semaphore(1)   # never more than one thumbnail ffmpeg at a time
 
 
 def _segments(playlist):
@@ -83,13 +84,14 @@ def _grab_batch(jobs, out_dir):
         return
     cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin"]
     for src, _ in jobs:
-        cmd += ["-i", src]
+        # Keyframes only, one thread: thumbnails must never starve the live remux.
+        cmd += ["-skip_frame", "nokey", "-threads", "1", "-i", src]
     for i, (_, name) in enumerate(jobs):
         # ?: an audio-only or corrupt segment must not kill the whole batch.
         cmd += ["-map", f"{i}:v:0?", "-frames:v", "1", "-vf", _VF,
                 "-q:v", "5", os.path.join(out_dir, name)]
     try:
-        subprocess.run(cmd, capture_output=True, timeout=180)
+        subprocess.run(cmd, capture_output=True, timeout=180, preexec_fn=lambda: os.nice(19))
     except (OSError, subprocess.TimeoutExpired):
         pass
 
@@ -127,7 +129,19 @@ def _pack(seg_dir, items):
     os.replace(tmp, bif)
 
 
+def complete(playlist):
+    """Only finished content gets thumbnails: the Roku reads the BIF once when
+    playback starts, so a BIF of a still-growing buffer limits FF/RW to the few
+    frames it had at that moment."""
+    try:
+        with open(playlist) as f:
+            return "#EXT-X-ENDLIST" in f.read()
+    except OSError:
+        return False
+
+
 def _build(seg_dir, playlist):
+    _one_build.acquire()
     try:
         tdir = os.path.join(seg_dir, "thumbs")
         os.makedirs(tdir, exist_ok=True)
@@ -158,10 +172,9 @@ def _build(seg_dir, playlist):
                     meta["items"][name] = (ts, out)
                 else:
                     meta["bad"].append(name)
-            # Repack per batch: a partial BIF is useful while the rest builds.
-            _pack(seg_dir,
-                  [(ts * 1000.0, os.path.join(tdir, out))
-                   for ts, out in meta["items"].values()])
+        # Packed once at the end, so a served BIF always covers the whole file.
+        _pack(seg_dir, [(ts * 1000.0, os.path.join(tdir, out))
+                        for ts, out in meta["items"].values()])
         meta["covered"] = total
         try:
             with open(_meta_path(seg_dir), "w") as f:
@@ -169,17 +182,18 @@ def _build(seg_dir, playlist):
         except OSError:
             pass
     finally:
+        _one_build.release()
         with _lock:
             _jobs.discard(seg_dir)
 
 
 def ensure_bif(seg_dir, playlist):
     """Kick a background (re)build if the BIF is missing or the content grew past
-    the thumbed region. Returns the bif path if one exists right now, else None."""
+    the thumbed region. Returns the bif path if a complete one exists, else None."""
     bif = os.path.join(seg_dir, "trickplay.bif")
     found = _segments(playlist)
     if not found or not found[0]:
-        return bif if os.path.exists(bif) else None
+        return None
     _, total = found
     covered = _load_meta(seg_dir).get("covered", 0.0)
     need = not os.path.exists(bif) or total - covered > REBUILD_GAP
@@ -189,19 +203,5 @@ def ensure_bif(seg_dir, playlist):
                 _jobs.add(seg_dir)
                 threading.Thread(target=_build, args=(seg_dir, playlist),
                                  daemon=True).start()
-    return bif if os.path.exists(bif) else None
+    return bif if os.path.exists(bif) and not need else None
 
-
-def wait_for(seg_dir, timeout=12.0):
-    """Poll for a built BIF (a build just kicked off). Returns path or None."""
-    bif = os.path.join(seg_dir, "trickplay.bif")
-    end = time.time() + timeout
-    while time.time() < end:
-        if os.path.exists(bif):
-            return bif
-        with _lock:
-            building = seg_dir in _jobs
-        if not building and os.path.exists(bif):
-            return bif
-        time.sleep(0.5)
-    return bif if os.path.exists(bif) else None

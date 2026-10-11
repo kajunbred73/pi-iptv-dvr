@@ -1279,8 +1279,8 @@ end sub
 ' ------------------------------------------------------------------ playback
 
 ' BIF thumbnail archive on the Pi (built from the muxed segments) - gives the
-' built-in seek bar image previews during FF/RW on movies, recordings and live
-' buffers. Missing file falls back to time-based trick play, so always safe.
+' built-in seek bar image previews during FF/RW on finished movies and
+' recordings. Missing file falls back to time-based trick play, so always safe.
 function bifUrl() as String
     if m.vodId >= 0 then return m.server + "/api/vod/" + m.vodId.toStr() + "/trickplay.bif"
     if m.recordingId >= 0 then return m.server + "/api/recordings/" + m.recordingId.toStr() + "/trickplay.bif"
@@ -1288,6 +1288,9 @@ function bifUrl() as String
 end function
 
 sub setTrickPlay(c as Object)
+    ' Live buffers grow, but the Roku reads the BIF only once: a partial one
+    ' limited RW to the couple of frames it held when the channel was tuned.
+    if m.isLive then return
     bf = bifUrl()
     if bf = "" then return
     c.sdbifurl = bf
