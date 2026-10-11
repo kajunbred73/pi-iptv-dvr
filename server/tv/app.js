@@ -922,12 +922,18 @@ function searchFor(q) {
 
 function channelMenu(ch) {
   const now = ch.now;
-  const btns = ['Watch', 'Record current show', (ch.favorite ? 'Remove favorite' : 'Add favorite'), 'Close'];
+  const btns = ['Watch', 'Record current show'];
+  if (now) btns.push('Record series...');
+  btns.push(ch.favorite ? 'Remove favorite' : 'Add favorite', 'Close');
   showMsg(txt(ch.num) + ' ' + txt(ch.name), now ? 'Now: ' + txt(now.title) : '', btns, idx => {
-    if (idx === 0) playChannel(ch);
-    else if (idx === 1) api('/schedules', () => toast('Recording scheduled'), 'POST',
+    const a = btns[idx];
+    if (a === 'Watch') playChannel(ch);
+    else if (a === 'Record current show') api('/schedules', () => toast('Recording scheduled'), 'POST',
       JSON.stringify({ channel_id: ch.id, program_start: now ? now.start : undefined }));
-    else if (idx === 2) api(`/channels/${ch.id}/favorite`, () => {}, 'POST', JSON.stringify({ favorite: !ch.favorite }));
+    else if (a === 'Record series...')
+      seriesRecordMenu({ title: now.title, channel_id: ch.id, channel_name: ch.name });
+    else if (idx === btns.length - 2)
+      api(`/channels/${ch.id}/favorite`, () => {}, 'POST', JSON.stringify({ favorite: !ch.favorite }));
   });
 }
 

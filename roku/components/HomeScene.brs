@@ -779,6 +779,8 @@ sub channelMenu(ch as Object, prog as Object)
             buttons.push("Record")
             actions.push("record")
         end if
+        buttons.push("Record series")
+        actions.push("series")
     else
         buttons.push("Record 60 minutes")
         actions.push("record60")
@@ -818,6 +820,10 @@ sub onChannelMenu(ev as Object)
         api("/schedules", "scheduled_ok", "POST", FormatJson({ channel_id: ch.id, minutes: 60 }))
     else if action = "unschedule"
         api("/schedules/by-program?channel_id=" + txt(ch.id) + "&start=" + txt(prog.start), "cancel_ok", "DELETE", "")
+    else if action = "series"
+        ' The grid's program rows carry no channel fields - channelMenu already
+        ' has the channel, so hand seriesRecordMenu a synthesized object.
+        seriesRecordMenu({ title: prog.title, channel_id: ch.id, channel_name: ch.name })
     else if action = "fav"
         toggleFavorite(ch)
     end if
