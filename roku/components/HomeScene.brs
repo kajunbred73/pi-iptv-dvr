@@ -2914,7 +2914,8 @@ sub onApiResponse(ev as Object)
             res = imp.result
             if res <> invalid
                 if res.channels <> invalid then lines.push("Last import: " + txt(res.channels) + " channels, " + txt(res.programs) + " programs")
-                for each k in ["channels_error", "programs_error"]
+                if res.movies <> invalid or res.series <> invalid then lines.push("Catalogs: " + txt(res.movies) + " movies, " + txt(res.series) + " series")
+                for each k in ["channels_error", "programs_error", "catalog_error", "movies_error", "series_error"]
                     if res[k] <> invalid and txt(res[k]) <> ""
                         lines.push("Last import " + k + ": " + Left(txt(res[k]), 80))
                     end if

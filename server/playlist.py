@@ -176,19 +176,6 @@ def import_m3u(url=None):
     # Materialize fully before touching the table: a generator that errors halfway
     # would otherwise DELETE the catalog and then die.
     source = list(_xtream_channels() if xtream else _m3u_channels())
-    # Same for movies: fetch before opening the write transaction so a failed
-    # download leaves the existing vod table untouched.
-    vod_list = None
-    series_list = None
-    if xtream:
-        try:
-            vod_list = list(_xtream_vod())
-        except Exception:
-            log.exception("vod fetch failed - keeping existing movie catalog")
-        try:
-            series_list = list(_xtream_series())
-        except Exception:
-            log.exception("series fetch failed - keeping existing series catalog")
     c = db.conn()
     prev = db.rows("SELECT id, url, tvg_id, name, favorite, fav_order FROM channels")
     if prev and not source:
@@ -225,65 +212,101 @@ def import_m3u(url=None):
     used_ids = set()
     count, fav_n = 0, 0
     groups = {}
+    rows = []
+    for i, ch in enumerate(source, 1):
+        hit = favs.get(ch["url"])
+        if hit is None and ch["tvg_id"]:
+            hit = favs.get("tvg:" + ch["tvg_id"])
+        if hit is None:
+            hit = favs.get("name:" + (ch["name"] or "").strip().lower())
+        fav = 1 if hit is not None else 0
+        forder = hit or 0
+        fav_n += fav
+        cid = old_ids.get(ch["url"])
+        if cid is None and ch["tvg_id"]:
+            cid = old_ids.get("tvg:" + ch["tvg_id"])
+        if cid is None:
+            cid = old_ids.get("name:" + (ch["name"] or "").strip().lower())
+        if cid in used_ids:
+            cid = None
+        if cid is not None:
+            used_ids.add(cid)
+        rows.append((cid, ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"],
+                     ch["grp"], ch["url"], fav, forder))
+        groups[ch["grp"]] = groups.get(ch["grp"], 0) + 1
+        count += 1
     try:
         c.execute("DELETE FROM channels")
-        for i, ch in enumerate(source, 1):
-            hit = favs.get(ch["url"])
-            if hit is None and ch["tvg_id"]:
-                hit = favs.get("tvg:" + ch["tvg_id"])
-            if hit is None:
-                hit = favs.get("name:" + (ch["name"] or "").strip().lower())
-            fav = 1 if hit is not None else 0
-            forder = hit or 0
-            fav_n += fav
-            cid = old_ids.get(ch["url"])
-            if cid is None and ch["tvg_id"]:
-                cid = old_ids.get("tvg:" + ch["tvg_id"])
-            if cid is None:
-                cid = old_ids.get("name:" + (ch["name"] or "").strip().lower())
-            if cid in used_ids:
-                cid = None
+        # Preserved-id rows go in FIRST: SQLite hands an id-less INSERT the
+        # rowid max(rowid)+1 of the current table, which walks 1,2,3... right
+        # into ids a later row wants to preserve -> "UNIQUE constraint failed:
+        # channels.id". With all explicit ids already in place, auto rowids
+        # always land above them and can never collide.
+        for row in sorted(rows, key=lambda r: r[0] is None):
+            cid, num, name, tvg_id, logo, grp, url, fav, forder = row
             if cid is not None:
-                used_ids.add(cid)
                 c.execute(
                     "INSERT INTO channels(id, num, name, tvg_id, logo, grp, url, favorite, fav_order) VALUES(?,?,?,?,?,?,?,?,?)",
-                    (cid, ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"], ch["grp"], ch["url"], fav, forder),
+                    (cid, num, name, tvg_id, logo, grp, url, fav, forder),
                 )
             else:
                 c.execute(
                     "INSERT INTO channels(num, name, tvg_id, logo, grp, url, favorite, fav_order) VALUES(?,?,?,?,?,?,?,?)",
-                    (ch["num"] or i, ch["name"], ch["tvg_id"], ch["logo"], ch["grp"], ch["url"], fav, forder),
+                    (num, name, tvg_id, logo, grp, url, fav, forder),
                 )
-            groups[ch["grp"]] = groups.get(ch["grp"], 0) + 1
-            count += 1
         # New groups start enabled only for small playlists; otherwise the user picks in Settings.
         default_on = 1 if count <= 500 else 0
         c.executemany("INSERT OR IGNORE INTO groups(name, enabled) VALUES(?,?)", [(g, default_on) for g in groups])
         c.executemany("UPDATE groups SET count=? WHERE name=?", [(n, g) for g, n in groups.items()])
         if groups:
             c.execute("DELETE FROM groups WHERE name NOT IN (%s)" % ",".join("?" * len(groups)), list(groups))
-        if vod_list is not None:
-            c.execute("DELETE FROM vod")
-            for mv in vod_list:
-                c.execute("INSERT INTO vod(vod_id, name, logo, grp, ext, url) VALUES(?,?,?,?,?,?)",
-                          (mv["vod_id"], mv["name"], mv["logo"], mv["grp"], mv["ext"], mv["url"]))
-        if series_list is not None:
-            c.execute("DELETE FROM series")
-            for sr in series_list:
-                c.execute("INSERT INTO series(series_id, name, logo, grp) VALUES(?,?,?,?)",
-                          (sr["series_id"], sr["name"], sr["logo"], sr["grp"]))
         c.commit()
     except Exception:
-        # Roll back the half-written catalog; the previous tables stay intact.
+        # Roll back the half-written catalog; the previous table stays intact.
         c.rollback()
         raise
-    if vod_list is not None:
-        log.info("imported %d movies", len(vod_list))
-    if series_list is not None:
-        log.info("imported %d series", len(series_list))
     db.set_meta("m3u_last", int(time.time()))
     log.info("imported %d live channels in %d groups", count, len(groups))
     return count
+
+
+def import_catalogs():
+    """Movies + series catalogs via the Xtream API. Each catalog gets its own
+    transaction and a fetch-then-delete order, so a failure on one leaves the
+    existing table - and the other catalog, and the channel import - intact."""
+    if not all(config.get(k) for k in ("xtream_host", "xtream_user", "xtream_pass")):
+        return {}
+    out = {}
+    c = db.conn()
+    try:
+        vod_list = list(_xtream_vod())
+        c.execute("DELETE FROM vod")
+        for mv in vod_list:
+            c.execute("INSERT INTO vod(vod_id, name, logo, grp, ext, url) VALUES(?,?,?,?,?,?)",
+                      (mv["vod_id"], mv["name"], mv["logo"], mv["grp"], mv["ext"], mv["url"]))
+        c.commit()
+        out["movies"] = len(vod_list)
+        log.info("imported %d movies", len(vod_list))
+    except Exception as e:
+        c.rollback()
+        log.exception("vod import failed - keeping existing movie catalog")
+        out["movies_error"] = str(e)
+    try:
+        series_list = list(_xtream_series())
+        c.execute("DELETE FROM series")
+        for sr in series_list:
+            # OR REPLACE: providers sometimes list a series twice and a UNIQUE
+            # violation shouldn't lose the whole catalog.
+            c.execute("INSERT OR REPLACE INTO series(series_id, name, logo, grp) VALUES(?,?,?,?)",
+                      (sr["series_id"], sr["name"], sr["logo"], sr["grp"]))
+        c.commit()
+        out["series"] = len(series_list)
+        log.info("imported %d series", len(series_list))
+    except Exception as e:
+        c.rollback()
+        log.exception("series import failed - keeping existing series catalog")
+        out["series_error"] = str(e)
+    return out
 
 
 # ---------------------------------------------------------------- XMLTV
@@ -379,6 +402,12 @@ def refresh_all(epg_only=False):
             except Exception as e:
                 log.exception("m3u import failed")
                 result["channels_error"] = str(e)
+            state["step"] = "catalogs"
+            try:
+                result.update(import_catalogs())
+            except Exception as e:
+                log.exception("catalog import failed")
+                result["catalog_error"] = str(e)
         state["step"] = "guide"
         try:
             result["programs"] = import_epg()
