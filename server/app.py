@@ -676,10 +676,106 @@ def api_vod_info(vid):
     return jsonify(info)
 
 
+# ---------------------------------------------------------------- series
+
+# Series episodes join the VOD mux path under a high "vid" namespace so the
+# whole playback chain (ready polls, rejoins, thumbnails, resume marks) works
+# unchanged: vid = _EP_VID + episodes.id.
+_EP_VID = 1_500_000_000
+
+
+@app.get("/api/series/groups")
+def api_series_groups():
+    return jsonify(db.rows("SELECT grp AS name, COUNT(*) AS count FROM series "
+                           "GROUP BY grp ORDER BY grp"))
+
+
+@app.get("/api/series")
+def api_series():
+    clauses, args = [], []
+    if request.args.get("group") is not None:
+        clauses.append("grp=?")
+        args.append(request.args["group"])
+    if request.args.get("q"):
+        clauses.append("name LIKE ?")
+        args.append("%" + request.args["q"] + "%")
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    return jsonify(db.rows(
+        f"SELECT id, name, logo, grp FROM series {where} ORDER BY name LIMIT 500", args))
+
+
+def _series_episodes(s):
+    """Episode rows for a series, lazily fetched+cached via get_series_info.
+
+    Fetching every episode of every series at import would be hundreds of
+    thousands of rows; instead we fetch one series' list on first open, cache
+    it keyed by the provider's series_id (survives catalog reimports), and
+    refresh when the cache is a day old."""
+    eps = db.rows("SELECT * FROM series_episodes WHERE series_id=? "
+                  "ORDER BY season, ep", (s["series_id"],))
+    fetched = int(db.get_meta("ser_eps:" + str(s["series_id"])) or 0)
+    if eps and _now() - fetched < 86400:
+        return eps
+    host, user, pw = (config.get(k) for k in ("xtream_host", "xtream_user", "xtream_pass"))
+    try:
+        url = (f"{host}/player_api.php?username={quote(user)}&password={quote(pw)}"
+               f"&action=get_series_info&series_id={s['series_id']}")
+        with urllib.request.urlopen(url, timeout=15) as r:
+            info = json.load(r) or {}
+    except Exception as e:
+        log.warning("get_series_info %s failed: %s", s["series_id"], e)
+        return eps  # stale cache beats nothing; empty means "could not load"
+    rows = []
+    for snum, elist in (info.get("episodes") or {}).items():
+        try:
+            sn = int(snum)
+        except (TypeError, ValueError):
+            sn = 0
+        for e in elist or []:
+            ext = e.get("container_extension") or "mp4"
+            ep_url = f"{host}/series/{quote(user)}/{quote(pw)}/{e.get('id')}.{ext}"
+            try:
+                epn = int(e.get("episode_num") or 0)
+            except (TypeError, ValueError):
+                epn = 0
+            rows.append((s["series_id"], sn, epn, e.get("title") or "",
+                         ep_url, ((e.get("info") or {}).get("plot") or "")))
+    if rows:
+        c = db.conn()
+        c.execute("DELETE FROM series_episodes WHERE series_id=?", (s["series_id"],))
+        c.executemany("INSERT OR REPLACE INTO series_episodes"
+                      "(series_id, season, ep, title, url, plot) VALUES(?,?,?,?,?,?)", rows)
+        c.commit()
+        db.set_meta("ser_eps:" + str(s["series_id"]), _now())
+        eps = db.rows("SELECT * FROM series_episodes WHERE series_id=? "
+                      "ORDER BY season, ep", (s["series_id"],))
+    return eps
+
+
+@app.get("/api/series/<int:sid>/episodes")
+def api_series_episodes(sid):
+    s = db.row("SELECT * FROM series WHERE id=?", (sid,)) or abort(404)
+    eps = _series_episodes(s)
+    return jsonify({"ok": True, "name": s["name"], "items": [
+        {"vid": _EP_VID + e["id"], "season": e["season"], "ep": e["ep"],
+         "title": e["title"], "plot": e["plot"] or ""} for e in eps]})
+
+
+def _vod_movie(vid):
+    """A vod row, or a series episode under its high-offset vid namespace."""
+    if vid >= _EP_VID:
+        e = db.row("SELECT * FROM series_episodes WHERE id=?", (vid - _EP_VID,)) or abort(404)
+        sr = db.row("SELECT name FROM series WHERE series_id=?", (e["series_id"],))
+        title = e["title"] or f"Season {e['season']} Episode {e['ep']}"
+        name = f"{sr['name']} - S{e['season']:02d}E{e['ep']:02d}" if sr else title
+        return {"id": vid, "name": name, "url": e["url"]}
+    return db.row("SELECT * FROM vod WHERE id=?", (vid,)) or abort(404)
+
+
 @app.post("/api/vod/<int:vid>/play")
 def api_vod_play(vid):
     """Start muxing a movie to HLS and return its playlist URL once it has data."""
-    m = db.row("SELECT * FROM vod WHERE id=?", (vid,)) or abort(404)
+    m = _vod_movie(vid)
     try:
         pos = float(request.args.get("pos") or 0)
     except ValueError:

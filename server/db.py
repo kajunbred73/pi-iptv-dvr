@@ -79,6 +79,27 @@ CREATE TABLE IF NOT EXISTS vod_info (
     fetched INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS series (
+    id INTEGER PRIMARY KEY,
+    series_id INTEGER UNIQUE,     -- provider's series id
+    name TEXT NOT NULL,
+    logo TEXT,
+    grp TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_series_grp ON series(grp);
+
+CREATE TABLE IF NOT EXISTS series_episodes (
+    id INTEGER PRIMARY KEY,
+    series_id INTEGER NOT NULL,   -- provider's series id (stable across catalog reimports)
+    season INTEGER,
+    ep INTEGER,
+    title TEXT,
+    url TEXT NOT NULL,
+    plot TEXT,
+    UNIQUE(series_id, season, ep)
+);
+CREATE INDEX IF NOT EXISTS idx_ser_eps ON series_episodes(series_id);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT

@@ -29,7 +29,7 @@ sub init()
     m.vodInfoTimer.observeField("fire", "onVodInfoTimer")
     m.statusTimer = m.top.findNode("statusTimer")
 
-    m.tabs = ["Favorites", "Guide", "Recent", "Search", "Categories", "Movies", "Sports Teams", "Recordings", "Scheduled", "Settings"]
+    m.tabs = ["Favorites", "Guide", "Recent", "Search", "Categories", "Movies", "Series", "Sports Teams", "Recordings", "Scheduled", "Settings"]
     m.menu.content = makeList(m.tabs)
     m.menu.observeField("itemFocused", "onMenuFocused")
     m.menu.observeField("itemSelected", "onMenuSelected")
@@ -68,6 +68,9 @@ sub init()
     m.vodOffset = 0
     m.vodCodec = ""
     m.vodGroup = ""
+    m.seriesGroup = ""
+    m.seriesName = ""
+    m.vodKind = "movie"
     m.resumeIsVod = false
     m.playTitle = ""
     m.streamUrl = ""
@@ -335,6 +338,10 @@ sub showTab(idx as Integer)
         m.mode = "vodcats"
         m.hint.text = "OK: open category"
         api("/vod/groups", "vodgroups")
+    else if tabName = "Series"
+        m.mode = "seriescats"
+        m.hint.text = "OK: open category"
+        api("/series/groups", "seriesgroups")
     else if tabName = "Sports Teams"
         m.mode = "teams"
         m.hint.text = "OK: team options (find / rename / delete)   Back: menu"
@@ -417,6 +424,16 @@ sub onContentFocused()
         end if
     else if m.mode = "vodlist"
         m.detail.text = txt(it.grp)
+    else if m.mode = "seriescats"
+        if it.search = true
+            m.detail.text = "Search all series by name"
+        else
+            m.detail.text = txt(it.count) + " series"
+        end if
+    else if m.mode = "serieslist"
+        m.detail.text = txt(it.grp)
+    else if m.mode = "serieseps"
+        m.detail.text = txt(it.plot)
         ' Debounced: fetch plot/rating only after the highlight rests ~0.6 s,
         ' so fast scrolling doesn't fire a provider lookup per row.
         if it.id <> invalid
@@ -488,6 +505,25 @@ sub onContentSelected()
             api("/vod?group=" + urlEnc(txt(it.name)), "vodlist")
         end if
     else if m.mode = "vodlist"
+        selectVodItem(it)
+    else if m.mode = "seriescats"
+        if it.search = true
+            promptSeriesSearch()
+        else
+            m.seriesGroup = txt(it.name)
+            m.mode = "serieslist"
+            m.heading.text = "Series: " + txt(it.name)
+            m.hint.text = "OK: open series   Back: categories"
+            api("/series?group=" + urlEnc(m.seriesGroup), "serieslist")
+        end if
+    else if m.mode = "serieslist"
+        m.seriesName = txt(it.name)
+        m.mode = "serieseps"
+        m.heading.text = txt(it.name)
+        m.hint.text = "OK: play episode   *: clear resume   Back: series list"
+        showLoading("Loading episodes...")
+        api("/series/" + it.id.toStr() + "/episodes", "serieseps")
+    else if m.mode = "serieseps"
         selectVodItem(it)
     else if m.mode = "recent"
         if it.kind = "movie"
@@ -884,6 +920,22 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             api("/vod/groups", "vodgroups")
             return true
         end if
+        if m.content.hasFocus() and m.mode = "serieseps"
+            ' Episodes -> series list (re-fetch; the series rows are still cached server-side).
+            m.mode = "serieslist"
+            m.heading.text = "Series: " + m.seriesGroup
+            m.hint.text = "OK: open series   Back: categories"
+            api("/series?group=" + urlEnc(m.seriesGroup), "serieslist")
+            return true
+        end if
+        if m.content.hasFocus() and m.mode = "serieslist"
+            ' Series list -> categories.
+            m.mode = "seriescats"
+            m.heading.text = "Series"
+            m.hint.text = "OK: open category"
+            api("/series/groups", "seriesgroups")
+            return true
+        end if
         if m.content.hasFocus() or m.grid.hasFocus()
             m.menu.setFocus(true)
             return true
@@ -909,7 +961,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             else if m.mode = "teams"
                 deleteTeamFocused()
                 return true
-            else if m.mode = "vodlist"
+            else if m.mode = "vodlist" or m.mode = "serieseps"
                 clearVodResume()
                 return true
             else if m.mode = "recent"
@@ -1028,6 +1080,33 @@ sub vodSearch(q as String)
     m.heading.text = "Movies: '" + q + "'"
     m.hint.text = "OK: play movie   *: clear resume mark   Back: categories"
     api("/vod?q=" + urlEnc(q), "vodlist")
+end sub
+
+sub promptSeriesSearch()
+    k = CreateObject("roSGNode", "KeyboardDialog")
+    k.title = "Search series"
+    k.message = "Type part of a series name"
+    k.text = ""
+    k.buttons = ["Search", "Cancel"]
+    k.observeField("buttonSelected", "onSeriesSearchEntered")
+    m.top.dialog = k
+end sub
+
+sub onSeriesSearchEntered(ev as Object)
+    k = ev.getRoSGNode()
+    if ev.getData() = 0
+        q = k.text.trim()
+        if q <> "" then seriesSearch(q)
+    end if
+    k.close = true
+end sub
+
+sub seriesSearch(q as String)
+    m.mode = "serieslist"
+    m.seriesGroup = ""
+    m.heading.text = "Series: '" + q + "'"
+    m.hint.text = "OK: open series   Back: categories"
+    api("/series?q=" + urlEnc(q), "serieslist")
 end sub
 
 ' The Pi only remuxes, so an HEVC movie on a Roku without an HEVC decoder can't play.
@@ -1683,6 +1762,8 @@ sub selectVodItem(it as Object)
     if m.video.visible then stopVideo(false, true, m.vodId = it.id)
     m.vodId = it.id
     m.vodCodec = ""
+    m.vodKind = "movie"
+    if it.kind = "episode" then m.vodKind = "episode"
     m.playTitle = txt(it.name)
     saved = readVodPos(it.id)
     if saved > 5
@@ -1721,6 +1802,7 @@ end sub
 
 function recentLabel(r as Object) as String
     if r.kind = "movie" then return "MOVIE   " + txt(r.name)
+    if r.kind = "episode" then return "SERIES  " + txt(r.name)
     line = txt(r.name)
     if txt(r.title) <> "" then line = line + "   -   " + txt(r.title)
     return line
@@ -1749,11 +1831,11 @@ sub renderRecents()
     end if
     recents = loadRecents()
     for each r in recents
-        if r.kind = "movie"
+        if r.kind = "movie" or r.kind = "episode"
             saved = readVodPos(r.id)
             if saved > 5
-                labels.push("RESUME   " + txt(r.name) + "   (movie, " + fmtDuration(saved) + " in)")
-                items.push({ kind: "movie", id: r.id, name: r.name, pos: saved })
+                labels.push("RESUME   " + txt(r.name) + "   (" + txt(r.kind) + ", " + fmtDuration(saved) + " in)")
+                items.push({ kind: r.kind, id: r.id, name: r.name, pos: saved })
             end if
         end if
     end for
@@ -1776,7 +1858,7 @@ sub removeRecentFocused()
         toast("Resume point cleared")
         return
     end if
-    if it.kind = "movie" and it.pos <> invalid
+    if (it.kind = "movie" or it.kind = "episode") and it.pos <> invalid
         m.reg.delete("vpos_" + it.id.toStr())
         m.reg.flush()
         renderRecents()
@@ -2330,8 +2412,9 @@ sub onApiError(ev as Object)
         m.statusTimer.duration = 5
         m.statusTimer.control = "start"
     else
+        if t.tag = "serieseps" then hideLoading()
         toast("Error: " + t.error)
-        if t.tag = "channels" or t.tag = "groups" or t.tag = "recordings" or t.tag = "schedules" or t.tag = "vodgroups" or t.tag = "vodlist"
+        if t.tag = "channels" or t.tag = "groups" or t.tag = "recordings" or t.tag = "schedules" or t.tag = "vodgroups" or t.tag = "vodlist" or t.tag = "seriesgroups" or t.tag = "serieslist" or t.tag = "serieseps"
             setRows([], [], "Cannot reach the Pi at " + m.server + ". Check Settings.")
         end if
     end if
@@ -2621,6 +2704,40 @@ sub onApiResponse(ev as Object)
             items.push(mv)
         end for
         setRows(labels, items, "No movies in this category.")
+    else if tag = "seriesgroups"
+        if m.mode <> "seriescats" then return
+        labels = ["Search series"]
+        items = [{ name: "", count: 0, search: true }]
+        for each g in r.items
+            name = txt(g.name)
+            if name = "" then name = "(no category)"
+            labels.push(name + "   (" + txt(g.count) + ")")
+            items.push({ name: g.name, count: g.count })
+        end for
+        setRows(labels, items, "No series found. Try Refresh playlist and guide on server from Settings.")
+    else if tag = "serieslist"
+        if m.mode <> "serieslist" then return
+        labels = []
+        items = []
+        for each sr in r.items
+            labels.push(txt(sr.name))
+            items.push(sr)
+        end for
+        setRows(labels, items, "No series here.")
+    else if tag = "serieseps"
+        hideLoading()
+        if m.mode <> "serieseps" then return
+        labels = []
+        items = []
+        for each e in r.items
+            lab = "S" + e.season.toStr() + " E" + e.ep.toStr() + "   " + txt(e.title)
+            saved = readVodPos(e.vid)
+            if saved > 5 then lab = lab + "   (resume " + fmtDuration(saved) + ")"
+            labels.push(lab)
+            items.push({ id: e.vid, plot: txt(e.plot), kind: "episode",
+                name: txt(r.name) + " - S" + e.season.toStr() + "E" + e.ep.toStr() + " " + txt(e.title) })
+        end for
+        setRows(labels, items, "Could not load episodes for this series.")
     else if tag = "cw"
         ' Continue Watching: stash the recordings list and re-render Recent so the
         ' RESUME rows show up (also refreshes the * hint and % watched).
@@ -2661,7 +2778,7 @@ sub onApiResponse(ev as Object)
             m.playTitle = txt(r.title)
             m.vodOffset = 0
             if r.offset <> invalid then m.vodOffset = r.offset
-            addRecent({ kind: "movie", id: m.vodId, name: m.playTitle })
+            addRecent({ kind: m.vodKind, id: m.vodId, name: m.playTitle })
             m.readyAttempts = 0
             m.readyTimer.control = "start"
         else

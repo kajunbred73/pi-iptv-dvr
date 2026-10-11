@@ -145,6 +145,28 @@ def _xtream_vod():
         }
 
 
+def _xtream_series():
+    """Series catalog via the Xtream player_api - names/posters only (a few MB).
+    Episode lists are fetched lazily per series via get_series_info, so the Pi
+    never holds the provider's whole series catalog in memory/DB at once."""
+    host, user, pw = config.get("xtream_host"), config.get("xtream_user"), config.get("xtream_pass")
+    base = f"{host}/player_api.php?username={quote(user)}&password={quote(pw)}"
+    with open(_download(base + "&action=get_series_categories", _tmp("sercats.json")), "rb") as f:
+        cats = {str(c.get("category_id")): c.get("category_name", "") for c in (json.load(f) or [])}
+    with open(_download(base + "&action=get_series", _tmp("series.json")), "rb") as f:
+        streams = json.load(f) or []
+    for s in streams:
+        sid = s.get("series_id")
+        if sid is None:
+            continue
+        yield {
+            "series_id": sid,
+            "name": s.get("name") or "Unknown",
+            "logo": s.get("cover") or s.get("stream_icon") or "",
+            "grp": cats.get(str(s.get("category_id")), ""),
+        }
+
+
 def import_m3u(url=None):
     xtream = all(config.get(k) for k in ("xtream_host", "xtream_user", "xtream_pass"))
     if not xtream and not (url or config.get("m3u_url")):
@@ -157,11 +179,16 @@ def import_m3u(url=None):
     # Same for movies: fetch before opening the write transaction so a failed
     # download leaves the existing vod table untouched.
     vod_list = None
+    series_list = None
     if xtream:
         try:
             vod_list = list(_xtream_vod())
         except Exception:
             log.exception("vod fetch failed - keeping existing movie catalog")
+        try:
+            series_list = list(_xtream_series())
+        except Exception:
+            log.exception("series fetch failed - keeping existing series catalog")
     c = db.conn()
     prev = db.rows("SELECT id, url, tvg_id, name, favorite, fav_order FROM channels")
     if prev and not source:
@@ -240,6 +267,11 @@ def import_m3u(url=None):
             for mv in vod_list:
                 c.execute("INSERT INTO vod(vod_id, name, logo, grp, ext, url) VALUES(?,?,?,?,?,?)",
                           (mv["vod_id"], mv["name"], mv["logo"], mv["grp"], mv["ext"], mv["url"]))
+        if series_list is not None:
+            c.execute("DELETE FROM series")
+            for sr in series_list:
+                c.execute("INSERT INTO series(series_id, name, logo, grp) VALUES(?,?,?,?)",
+                          (sr["series_id"], sr["name"], sr["logo"], sr["grp"]))
         c.commit()
     except Exception:
         # Roll back the half-written catalog; the previous tables stay intact.
@@ -247,6 +279,8 @@ def import_m3u(url=None):
         raise
     if vod_list is not None:
         log.info("imported %d movies", len(vod_list))
+    if series_list is not None:
+        log.info("imported %d series", len(series_list))
     db.set_meta("m3u_last", int(time.time()))
     log.info("imported %d live channels in %d groups", count, len(groups))
     return count
