@@ -100,6 +100,12 @@ CREATE TABLE IF NOT EXISTS series_episodes (
 );
 CREATE INDEX IF NOT EXISTS idx_ser_eps ON series_episodes(series_id);
 
+CREATE TABLE IF NOT EXISTS series_favs (
+    series_id INTEGER PRIMARY KEY,  -- provider's series id; a separate table so
+                                    -- catalog reimports (DELETE FROM series) keep it
+    added INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT

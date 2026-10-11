@@ -686,22 +686,45 @@ _EP_VID = 1_500_000_000
 
 @app.get("/api/series/groups")
 def api_series_groups():
-    return jsonify(db.rows("SELECT grp AS name, COUNT(*) AS count FROM series "
-                           "GROUP BY grp ORDER BY grp"))
+    rows = db.rows("SELECT grp AS name, COUNT(*) AS count FROM series "
+                   "GROUP BY grp ORDER BY grp")
+    fav_n = db.row("SELECT COUNT(*) AS n FROM series_favs")["n"]
+    # A "My Series" pseudo-category first so the client can render it like a group.
+    return jsonify([{"name": "", "count": fav_n, "favs": True}] + rows)
 
 
 @app.get("/api/series")
 def api_series():
     clauses, args = [], []
     if request.args.get("group") is not None:
-        clauses.append("grp=?")
+        clauses.append("s.grp=?")
         args.append(request.args["group"])
     if request.args.get("q"):
-        clauses.append("name LIKE ?")
+        clauses.append("s.name LIKE ?")
         args.append("%" + request.args["q"] + "%")
+    if request.args.get("fav"):
+        clauses.append("sf.series_id IS NOT NULL")
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     return jsonify(db.rows(
-        f"SELECT id, name, logo, grp FROM series {where} ORDER BY name LIMIT 500", args))
+        "SELECT s.id, s.name, s.logo, s.grp, (sf.series_id IS NOT NULL) AS fav "
+        "FROM series s LEFT JOIN series_favs sf ON sf.series_id = s.series_id "
+        f"{where} ORDER BY s.name LIMIT 500", args))
+
+
+@app.post("/api/series/<int:sid>/fav")
+def api_series_fav(sid):
+    """Toggle a series in/out of My Series. Keyed by the provider's series_id so
+    the flag survives catalog reimports (which DELETE+reINSERT series rows)."""
+    s = db.row("SELECT series_id, name FROM series WHERE id=?", (sid,)) or abort(404)
+    c = db.conn()
+    if db.row("SELECT series_id FROM series_favs WHERE series_id=?", (s["series_id"],)):
+        c.execute("DELETE FROM series_favs WHERE series_id=?", (s["series_id"],))
+        c.commit()
+        return jsonify({"ok": True, "fav": 0})
+    c.execute("INSERT OR REPLACE INTO series_favs(series_id, added) VALUES(?,?)",
+              (s["series_id"], int(time.time())))
+    c.commit()
+    return jsonify({"ok": True, "fav": 1})
 
 
 def _series_episodes(s):

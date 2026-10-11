@@ -70,6 +70,7 @@ sub init()
     m.vodGroup = ""
     m.seriesGroup = ""
     m.seriesName = ""
+    m.serFavIdx = -1
     m.vodKind = "movie"
     m.resumeIsVod = false
     m.playTitle = ""
@@ -427,6 +428,8 @@ sub onContentFocused()
     else if m.mode = "seriescats"
         if it.search = true
             m.detail.text = "Search all series by name"
+        else if it.favs = true
+            m.detail.text = "Series you added with *"
         else
             m.detail.text = txt(it.count) + " series"
         end if
@@ -509,11 +512,17 @@ sub onContentSelected()
     else if m.mode = "seriescats"
         if it.search = true
             promptSeriesSearch()
+        else if it.favs = true
+            m.seriesGroup = "__favs__"
+            m.mode = "serieslist"
+            m.heading.text = "My Series"
+            m.hint.text = "OK: open series   *: remove from My Series   Back: categories"
+            api("/series?fav=1", "serieslist")
         else
             m.seriesGroup = txt(it.name)
             m.mode = "serieslist"
             m.heading.text = "Series: " + txt(it.name)
-            m.hint.text = "OK: open series   Back: categories"
+            m.hint.text = "OK: open series   *: add to My Series   Back: categories"
             api("/series?group=" + urlEnc(m.seriesGroup), "serieslist")
         end if
     else if m.mode = "serieslist"
@@ -921,11 +930,23 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             return true
         end if
         if m.content.hasFocus() and m.mode = "serieseps"
-            ' Episodes -> series list (re-fetch; the series rows are still cached server-side).
+            ' Episodes -> whichever series list we came from.
             m.mode = "serieslist"
-            m.heading.text = "Series: " + m.seriesGroup
-            m.hint.text = "OK: open series   Back: categories"
-            api("/series?group=" + urlEnc(m.seriesGroup), "serieslist")
+            if m.seriesGroup = "__favs__"
+                m.heading.text = "My Series"
+                m.hint.text = "OK: open series   *: remove from My Series   Back: categories"
+                api("/series?fav=1", "serieslist")
+            else if m.seriesGroup <> ""
+                m.heading.text = "Series: " + m.seriesGroup
+                m.hint.text = "OK: open series   *: add to My Series   Back: categories"
+                api("/series?group=" + urlEnc(m.seriesGroup), "serieslist")
+            else
+                ' Came from a search - nowhere to go but the categories.
+                m.mode = "seriescats"
+                m.heading.text = "Series"
+                m.hint.text = "OK: open category"
+                api("/series/groups", "seriesgroups")
+            end if
             return true
         end if
         if m.content.hasFocus() and m.mode = "serieslist"
@@ -963,6 +984,9 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
                 return true
             else if m.mode = "vodlist" or m.mode = "serieseps"
                 clearVodResume()
+                return true
+            else if m.mode = "serieslist"
+                toggleSeriesFav()
                 return true
             else if m.mode = "recent"
                 removeRecentFocused()
@@ -1107,6 +1131,19 @@ sub seriesSearch(q as String)
     m.heading.text = "Series: '" + q + "'"
     m.hint.text = "OK: open series   Back: categories"
     api("/series?q=" + urlEnc(q), "serieslist")
+end sub
+
+function seriesLabel(sr as Object) as String
+    lab = txt(sr.name)
+    if sr.fav = 1 or sr.fav = true then lab = lab + "   *"
+    return lab
+end function
+
+sub toggleSeriesFav()
+    i = m.content.itemFocused
+    if i < 0 or i >= m.items.count() then return
+    m.serFavIdx = i
+    api("/series/" + m.items[i].id.toStr() + "/fav", "serfav", "POST", "")
 end sub
 
 ' The Pi only remuxes, so an HEVC movie on a Roku without an HEVC decoder can't play.
@@ -2709,10 +2746,15 @@ sub onApiResponse(ev as Object)
         labels = ["Search series"]
         items = [{ name: "", count: 0, search: true }]
         for each g in r.items
-            name = txt(g.name)
-            if name = "" then name = "(no category)"
-            labels.push(name + "   (" + txt(g.count) + ")")
-            items.push({ name: g.name, count: g.count })
+            if g.favs = true
+                labels.push("My Series   (" + txt(g.count) + ")")
+                items.push({ favs: true, name: "", count: g.count })
+            else
+                name = txt(g.name)
+                if name = "" then name = "(no category)"
+                labels.push(name + "   (" + txt(g.count) + ")")
+                items.push({ name: g.name, count: g.count })
+            end if
         end for
         setRows(labels, items, "No series found. Try Refresh playlist and guide on server from Settings.")
     else if tag = "serieslist"
@@ -2720,10 +2762,10 @@ sub onApiResponse(ev as Object)
         labels = []
         items = []
         for each sr in r.items
-            labels.push(txt(sr.name))
+            labels.push(seriesLabel(sr))
             items.push(sr)
         end for
-        setRows(labels, items, "No series here.")
+        setRows(labels, items, "No series here. Press * on a series in a category to add it to My Series.")
     else if tag = "serieseps"
         hideLoading()
         if m.mode <> "serieseps" then return
@@ -2738,6 +2780,34 @@ sub onApiResponse(ev as Object)
                 name: txt(r.name) + " - S" + e.season.toStr() + "E" + e.ep.toStr() + " " + txt(e.title) })
         end for
         setRows(labels, items, "Could not load episodes for this series.")
+    else if tag = "serfav"
+        if (r.ok = true or r.ok = 1) and m.mode = "serieslist"
+            i = m.serFavIdx
+            if i >= 0 and i < m.items.count()
+                it = m.items[i]
+                it.fav = r.fav
+                if r.fav = 1 or r.fav = "1"
+                    toast("Added " + txt(it.name) + " to My Series")
+                    ' Refresh the row's * marker in place, keeping scroll position.
+                    node = m.content.content.getChild(i)
+                    if node <> invalid then node.title = seriesLabel(it)
+                else
+                    toast("Removed " + txt(it.name) + " from My Series")
+                    if m.seriesGroup = "__favs__"
+                        ' Inside My Series: drop the row entirely.
+                        m.items.delete(i)
+                        m.content.content.removeChildIndex(i)
+                        if m.items.count() = 0
+                            m.empty.visible = true
+                            m.empty.text = "No series in My Series. Press * on a series to add one."
+                        end if
+                    else
+                        node = m.content.content.getChild(i)
+                        if node <> invalid then node.title = seriesLabel(it)
+                    end if
+                end if
+            end if
+        end if
     else if tag = "cw"
         ' Continue Watching: stash the recordings list and re-render Recent so the
         ' RESUME rows show up (also refreshes the * hint and % watched).
