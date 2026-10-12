@@ -866,6 +866,15 @@ function onRecordings(r) {
     return fmtDay(rec.start) + ' ' + fmtTime(rec.start) + '   ' + txt(rec.title) +
       '   (' + fmtDur(rec.duration) + ', ' + txt(rec.channel_name) + ', ' + fmtSize(rec.size_bytes) + ')' + tag;
   }), items, 'No recordings yet. Pick a show in the Guide and choose Record.');
+  document.querySelectorAll('#content .row').forEach((el, i) => {
+    // Clickable delete on the right of each row - mouse users shouldn't need
+    // hold-OK to remove a recording.
+    const del = document.createElement('span');
+    del.className = 'delbtn';
+    del.dataset.i = i;
+    del.textContent = '✕';
+    el.appendChild(del);
+  });
 }
 function loadScheduled() {
   S.schedItems = null; S.schedRules = null;
@@ -1415,7 +1424,10 @@ function optionsAction() {
   if (S.mode === 'list' && it.kind === 'channel') {
     api(`/channels/${it.ch.id}/favorite`, () => { toast(it.ch.favorite ? 'Removed from favorites' : 'Added to favorites'); searchFor(S.lastQuery); }, 'POST', JSON.stringify({ favorite: !it.ch.favorite }));
   } else if (S.mode === 'recordings') {
-    confirmBox(`Delete '${txt(it.title)}'?`, () => api('/recordings/' + it.id, () => { toast('Deleted'); api('/recordings', onRecordings); }, 'DELETE'));
+    confirmBox(it.status === 'recording'
+        ? `'${txt(it.title)}' is still recording - stop it and delete the file?`
+        : `Delete '${txt(it.title)}'?`,
+      () => api('/recordings/' + it.id, () => { toast('Deleted'); api('/recordings', onRecordings); }, 'DELETE'));
   } else if (S.mode === 'vodlist') {
     storeDel('vpos_' + it.id);
     api('/vod?group=' + urlEnc(S.vodGroup || ''), onVodList);
@@ -1647,6 +1659,18 @@ document.addEventListener('click', e => {
       toast(r.fav ? 'Added ' + txt(it.name) + ' to My Series' : 'Removed ' + txt(it.name) + ' from My Series');
       api('/series?' + S.seriesListQ, onSeriesList);
     }, 'POST', '{}');
+    return;
+  }
+
+  const del = t.closest('.delbtn');
+  if (del && S.mode === 'recordings') {
+    const it = S.items[+del.dataset.i];
+    if (it) {
+      const live = it.status === 'recording';
+      confirmBox(live ? `'${txt(it.title)}' is still recording - stop it and delete the file?`
+                      : `Delete '${txt(it.title)}'?`,
+        () => api('/recordings/' + it.id, () => { toast('Deleted'); api('/recordings', onRecordings); }, 'DELETE'));
+    }
     return;
   }
 

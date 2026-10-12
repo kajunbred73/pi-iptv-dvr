@@ -108,6 +108,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0e14; c
 .favstar { float: right; margin-left: 16px; font-size: 30px; line-height: 1.1;
   color: #6b7488; cursor: pointer; }
 .favstar.on { color: #ffd75e; }
+.delbtn { float: right; margin-left: 16px; font-size: 26px; line-height: 1.2;
+  color: #6b7488; cursor: pointer; padding: 0 8px; }
+.delbtn:hover, .row.sel .delbtn { color: #ff6b70; }
 .row.serdrag { cursor: grab; }
 #content .row.drop-above { box-shadow: inset 0 3px 0 #4da3ff; }
 #content .row.drop-below { box-shadow: inset 0 -3px 0 #4da3ff; }
