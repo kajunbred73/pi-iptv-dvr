@@ -389,6 +389,36 @@ def import_epg(url=None, max_days=3):
 
 # ---------------------------------------------------------------- orchestration
 
+def sync_schedules():
+    """Re-pin pending schedules whose program moved in the guide.
+
+    Providers adjust EPG timeslots after a recording was queued; the schedule
+    keeps its old start/stop, which both records the wrong minutes and breaks
+    the guide's [REC] flag (it joins schedules.start = programs.start exactly).
+    For each pending schedule with no program at its start, take the times of
+    the same-titled program on that channel nearest to the stored start."""
+    fixed = 0
+    now = int(time.time())
+    for s in db.rows("SELECT * FROM schedules WHERE status='scheduled'"):
+        ch = db.row("SELECT tvg_id FROM channels WHERE id=?", (s["channel_id"],))
+        if not ch:
+            continue
+        if db.row("SELECT id FROM programs WHERE tvg_id=? AND start=?",
+                  (ch["tvg_id"], s["start"])):
+            continue
+        near = db.row("SELECT start, stop FROM programs WHERE tvg_id=? AND "
+                      "LOWER(TRIM(title))=LOWER(TRIM(?)) AND stop>? AND ABS(start - ?) < 10800 "
+                      "ORDER BY ABS(start - ?) LIMIT 1",
+                      (ch["tvg_id"], s["title"], now, s["start"], s["start"]))
+        if near:
+            db.execute("UPDATE schedules SET start=?, stop=? WHERE id=?",
+                       (near["start"], near["stop"], s["id"]))
+            fixed += 1
+    if fixed:
+        log.info("re-pinned %d schedule(s) after guide times changed", fixed)
+    return fixed
+
+
 def apply_series_rules():
     """Queue schedules for future airings matching each series_rules row.
 
@@ -397,6 +427,7 @@ def apply_series_rules():
     same (channel_id, start) - in ANY status - blocks inserting, so a recording
     the user cancelled is never resurrected by the next import. The recorder
     adds the pre/post padding at dispatch, so programs store raw times."""
+    sync_schedules()
     rules = db.rows("SELECT * FROM series_rules")
     if not rules:
         return 0

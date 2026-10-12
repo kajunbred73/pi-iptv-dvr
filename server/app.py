@@ -523,6 +523,41 @@ def api_series_rule_delete(rid):
     return jsonify({"ok": True})
 
 
+@app.get("/api/debug/schedule-match")
+def api_debug_schedule_match():
+    """Why a scheduled recording isn't flagged in the guide: each pending
+    schedule alongside the program it does (or doesn't) line up with."""
+    out = []
+    for s in db.rows("SELECT * FROM schedules WHERE status IN ('scheduled','recording') ORDER BY start"):
+        e = {"schedule_id": s["id"], "title": s["title"], "start": s["start"],
+             "stop": s["stop"], "status": s["status"], "rule_id": s["rule_id"]}
+        ch = db.row("SELECT id, name, tvg_id FROM channels WHERE id=?", (s["channel_id"],))
+        if not ch:
+            e["problem"] = "channel_id %s no longer exists in channels" % s["channel_id"]
+        else:
+            e["channel"] = ch["name"]
+            prog = db.row("SELECT start, stop, title FROM programs WHERE tvg_id=? AND start=?",
+                          (ch["tvg_id"], s["start"]))
+            if prog:
+                e["problem"] = None
+                e["flags_in_guide"] = True
+            else:
+                near = db.row("SELECT start, stop, title FROM programs WHERE tvg_id=? AND "
+                              "LOWER(TRIM(title))=LOWER(TRIM(?)) AND ABS(start - ?) < 43200 "
+                              "ORDER BY ABS(start - ?) LIMIT 1",
+                              (ch["tvg_id"], s["title"], s["start"], s["start"]))
+                if near:
+                    e["problem"] = "start drifted %+ds - same-titled program is at %s" % (
+                        near["start"] - s["start"], near["start"])
+                    e["flags_in_guide"] = False
+                    e["moved_to"] = near
+                else:
+                    e["problem"] = "no program on this channel at/near that start"
+                    e["flags_in_guide"] = False
+        out.append(e)
+    return jsonify(out)
+
+
 @app.post("/api/timeshift")
 def api_timeshift():
     """Start a live buffer recording for the current show on a channel."""
