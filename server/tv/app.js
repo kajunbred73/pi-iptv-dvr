@@ -133,7 +133,7 @@ function showTab(idx) {
   const t = S.tabs[idx];
   if (t === 'Favorites') openGrid('favorites=1', 'Favorites');
   else if (t === 'Guide') openGrid('', 'Guide');
-  else if (t === 'Recent') { S.mode = 'recent'; setHint('OK: watch   hold OK: remove'); renderRecents(); }
+  else if (t === 'Recent') { S.mode = 'recent'; setHint('OK: watch   ✕ or hold OK: remove'); renderRecents(); }
   else if (t === 'Search') { S.mode = 'list'; setHint('OK: search channels and shows'); S.lastQuery ? searchFor(S.lastQuery) : setRows(['Search channels and shows (e.g. ABC, ESPN, Astros)...'], [{ kind: 'prompt' }]); }
   else if (t === 'Categories') { S.mode = 'categories'; setHint('OK: open category guide'); api('/groups', onGroups); }
   else if (t === 'Movies') { S.mode = 'vodcats'; setHint('OK: open category'); api('/vod/groups', onVodGroups); }
@@ -775,6 +775,13 @@ function renderRecents() {
   const items = loadRecents();
   setRows(items.map(recentLabel), items,
     'Nothing watched yet. Tune a channel or play a movie and it shows up here.');
+  document.querySelectorAll('#content .row').forEach((el, i) => {
+    const del = document.createElement('span');
+    del.className = 'delbtn';
+    del.dataset.i = i;
+    del.textContent = '✕';
+    el.appendChild(del);
+  });
 }
 function removeRecentFocused() {
   const items = loadRecents();
@@ -1663,6 +1670,14 @@ document.addEventListener('click', e => {
   }
 
   const del = t.closest('.delbtn');
+  if (del && S.mode === 'recent') {
+    const items = loadRecents();
+    items.splice(+del.dataset.i, 1);
+    storeSet('recent', items);
+    renderRecents();
+    toast('Removed');
+    return;
+  }
   if (del && S.mode === 'recordings') {
     const it = S.items[+del.dataset.i];
     if (it) {
