@@ -211,7 +211,7 @@ function renderGrid() {
       const x = cw + (a - start) / 1800 * sw, w = (b - a) / 1800 * sw;
       const isNow = p.start <= r.now && p.stop > r.now;
       const isSel = ri === S.gridRow && S.gridCol === ci && gridFocused();
-      html += `<div class="gcell ${isNow ? 'now' : ''} ${p.scheduled ? 'sched' : ''} ${isSel ? 'sel' : ''}" data-ri="${ri}" data-ci="${ci}" style="left:${x}px;width:${w}px;height:${chH - 12}px">${esc(txt(p.title))}${p.scheduled ? ' ●' : ''}</div>`;
+      html += `<div class="gcell ${isNow ? 'now' : ''} ${p.scheduled ? 'sched' : ''} ${isSel ? 'sel' : ''}" data-ri="${ri}" data-ci="${ci}" style="left:${x}px;width:${w}px;height:${chH - 12}px">${p.scheduled ? '<b class="recb">● REC</b> ' : ''}${esc(txt(p.title))}</div>`;
       ci++;
     }
     if (!ci) {

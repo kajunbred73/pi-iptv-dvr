@@ -36,7 +36,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0e14; c
 .gcell { position: absolute; top: 6px; height: 62px; background: #1a2333;
   border-radius: 6px; padding: 8px 12px; font-size: 21px; overflow: hidden;
   white-space: nowrap; text-overflow: ellipsis; color: #cfd6e4; border: 1px solid #232c40; }
-.gcell.sched { border-left: 4px solid #e0484f; }
+.gcell.sched { border-left: 4px solid #ff4d55; background: #45222b; }
+.gcell .recb { color: #ff6b70; font-weight: 700; margin-right: 2px; }
 .grow.sel .gcell, .grow.sel .gchan { color: #fff; }
 .gcell.sel { background: #3d6bff; color: #fff; }
 .gcell.now { background: #22304d; }
