@@ -308,8 +308,12 @@ def api_search():
         cj["next"] = nxt.get(ch["tvg_id"])
         ch_out.append(cj)
 
-    scheduled = {(s["channel_id"], s["start"]) for s in db.rows(
-        "SELECT channel_id, start FROM schedules WHERE status IN ('scheduled','recording')")}
+    # Match on tvg_id, not channel_id: the same EPG feed can sit on several
+    # channel rows (regional/HD duplicates) - the airing is being recorded
+    # regardless of which row displays it.
+    scheduled = {(s["tvg_id"], s["start"]) for s in db.rows(
+        "SELECT c.tvg_id AS tvg_id, s.start FROM schedules s JOIN channels c ON c.id=s.channel_id "
+        "WHERE s.status IN ('scheduled','recording')")}
     progs = db.rows(
         "SELECT p.tvg_id, p.start, p.stop, p.title, p.description, "
         "c.id AS channel_id, c.name AS channel_name, c.num AS num, c.logo AS logo "
@@ -319,7 +323,7 @@ def api_search():
         "ORDER BY p.start LIMIT 60",
         (like, like, now - 3600, now + 24 * 3600))
     for p in progs:
-        p["scheduled"] = (p["channel_id"], p["start"]) in scheduled
+        p["scheduled"] = (p["tvg_id"], p["start"]) in scheduled
         p["now_playing"] = p["start"] <= now and p["stop"] > now
     return jsonify({"channels": ch_out, "programs": progs})
 
@@ -399,10 +403,11 @@ def api_epg(cid):
     now = _now()
     progs = db.rows("SELECT * FROM programs WHERE tvg_id=? AND stop>? AND start<? ORDER BY start",
                     (ch["tvg_id"], now, now + hours * 3600))
-    scheduled = {(s["channel_id"], s["start"]) for s in db.rows(
-        "SELECT channel_id, start FROM schedules WHERE status IN ('scheduled','recording')")}
+    scheduled = {(s["tvg_id"], s["start"]) for s in db.rows(
+        "SELECT c.tvg_id AS tvg_id, s.start FROM schedules s JOIN channels c ON c.id=s.channel_id "
+        "WHERE s.status IN ('scheduled','recording')")}
     for p in progs:
-        p["scheduled"] = (cid, p["start"]) in scheduled
+        p["scheduled"] = (ch["tvg_id"], p["start"]) in scheduled
     return jsonify({"channel": _channel_json(ch), "programs": progs})
 
 
@@ -427,14 +432,15 @@ def api_guide():
                 f"WHERE tvg_id IN ({marks}) AND stop>? AND start<? ORDER BY start",
                 ids[i:i + 500] + [start, end]):
             progs.setdefault(p["tvg_id"], []).append(p)
-    scheduled = {(s["channel_id"], s["start"]) for s in db.rows(
-        "SELECT channel_id, start FROM schedules WHERE status IN ('scheduled','recording')")}
+    scheduled = {(s["tvg_id"], s["start"]) for s in db.rows(
+        "SELECT c.tvg_id AS tvg_id, s.start FROM schedules s JOIN channels c ON c.id=s.channel_id "
+        "WHERE s.status IN ('scheduled','recording')")}
     out = []
     for ch in chans:
         cj = _channel_json(ch)
         cj["programs"] = progs.get(ch["tvg_id"], [])
         for p in cj["programs"]:
-            p["scheduled"] = (ch["id"], p["start"]) in scheduled
+            p["scheduled"] = (ch["tvg_id"], p["start"]) in scheduled
         out.append(cj)
     return jsonify({"start": start, "end": end, "now": now, "channels": out})
 
