@@ -1170,6 +1170,7 @@ function piStatusLines(r) {
   L.push('Provider streams in use: ' + conn);
   const lives = (r.live_sessions || []).length;
   L.push(`Live buffers: ${lives}   Recording now: ${r.recording_now}   Scheduled: ${r.scheduled}`);
+  if (r.stream_input) L.push('Stream input: ' + r.stream_input);
   const p = r.provider || {};
   if (p.host) {
     L.push(`Provider (${p.host}): ` +

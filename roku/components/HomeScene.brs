@@ -3107,6 +3107,7 @@ sub onApiResponse(ev as Object)
         n = 0
         if r.live_sessions <> invalid then n = r.live_sessions.count()
         lines.push("Live buffers: " + n.toStr() + "   Recording now: " + txt(r.recording_now) + "   Scheduled: " + txt(r.scheduled))
+        if r.stream_input <> invalid then lines.push("Stream input: " + txt(r.stream_input))
         ' Provider probe: is the source host answering the Pi at all?
         if r.provider <> invalid and r.provider.host <> invalid and r.provider.host <> ""
             if r.provider.ok = true
