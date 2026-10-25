@@ -27,8 +27,10 @@ DEFAULTS = {
     "timeshift_idle_seconds": 120,   # stop a live buffer nobody has touched for this long
     "timeshift_keep_hours": 2,       # delete un-kept live buffers this long after they end
     "timeshift_min_segments": 3,     # segments needed before the Roku starts playing
-    "xtream_hls_input": False,       # pull Xtream live streams as .m3u8 instead of raw .ts
-                                     # (only if the provider actually serves that endpoint)
+    "xtream_hls_input": True,        # pull Xtream live streams as .m3u8 instead of raw .ts
+                                     # (the provider drops raw .ts connections and resends
+                                     # video on reconnect, which loops live TV on the Roku)
+    "hls_input_migrated": False,     # one-time switch of old configs to xtream_hls_input on
     "audio_delay_ms": 0,             # lip-sync trim: + delays audio, - delays video (ms)
     "audio_mode": "auto",            # auto: copy AAC-LC/HE-AAC audio, re-encode the rest
                                      # copy: never re-encode | aac: always re-encode
@@ -55,6 +57,12 @@ def load():
                     # fall back to defaults and keep serving.
                     logging.getLogger("iptv").error(
                         "config.json unreadable (%s) - using defaults", e)
+                else:
+                    if not _cfg.get("hls_input_migrated"):
+                        # Older configs saved the old raw-.ts default; move them to HLS once.
+                        _cfg.update(xtream_hls_input=True, hls_input_migrated=True)
+                        with open(CONFIG_PATH, "w") as f:
+                            json.dump(_cfg, f, indent=2)
             os.makedirs(_cfg["recordings_dir"], exist_ok=True)
             os.makedirs(_cfg["live_dir"], exist_ok=True)
             os.makedirs(_cfg["vod_dir"], exist_ok=True)

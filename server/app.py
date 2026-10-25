@@ -259,6 +259,7 @@ def api_status():
         "epg_last": int(db.get_meta("epg_last", 0) or 0),
         "live_sessions": streamer.live.status(),
         "provider": dict(_provider_state),
+        "stream_input": "HLS (.m3u8)" if config.get("xtream_hls_input") else "raw .ts (live TV may loop)",
         "import": playlist.state,
     })
 
@@ -1102,8 +1103,6 @@ def api_config_set():
     for k in ("xtream_hls_input",):
         if k in body:
             body[k] = body[k] in (True, "1", "true", "on", 1)
-        if k in body:
-            body[k] = int(body[k])
     return jsonify(config.save(body))
 
 
