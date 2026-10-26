@@ -49,7 +49,7 @@ def _input_url(url):
     return url
 
 
-def _input_args(url, start_at=0):
+def _input_args(url, start_at=0, live_edge=False):
     url = _input_url(url)
     # IPTV feeds are full of corrupt packets and timestamp jumps; drop the junk and let ffmpeg
     # regenerate timestamps so the copied-through output stays monotonic (otherwise the Roku
@@ -81,6 +81,10 @@ def _input_args(url, start_at=0):
         # Xtream HLS segments are extensionless /hls/<token> URLs, which ffmpeg's
         # hls demuxer refuses by default ("not in allowed_segment_extensions").
         args += _hls_any_ext_args()
+        if live_edge:
+            # Join at the provider's newest segment. The default (3 back) re-records
+            # content an in-place restart already has, which the viewer sees as a replay.
+            args += ["-live_start_index", "-1"]
     args += ["-i", url]
     return args
 
@@ -465,6 +469,13 @@ class Recorder:
                     if quiet > 60:
                         log.warning("rec=%s playlist stalled %ds, restarting ffmpeg", rid, int(quiet))
                         proc.terminate()
+                    elif t is not None and self._hls_fell_behind(t, rec["path"]) \
+                            and now - self.spawned.get(sid, now) > 30:
+                        # ffmpeg's HLS reader dropped to the back of the provider's window;
+                        # from there every playlist refresh expires another segment and it
+                        # skips 10-20 s each time. Restart at the live edge instead.
+                        log.warning("rec=%s fell behind the provider playlist, resyncing ffmpeg", rid)
+                        proc.terminate()
             if proc.poll() is not None or expired:
                 try:
                     proc.wait(10)
@@ -484,6 +495,22 @@ class Recorder:
                         if fails < 5 and self._restart_timeshift(sid, rid, sched, now):
                             continue
                     self._finish(sid, rid, proc.returncode)
+
+    @staticmethod
+    def _hls_fell_behind(t, path):
+        """True when ffmpeg logged an expired-segment skip since the last check."""
+        lf = os.path.join(config.get("recordings_dir"), path, "ffmpeg.log")
+        try:
+            size = os.path.getsize(lf)
+            pos = t.get("log_pos")
+            t["log_pos"] = size
+            if pos is None or size <= pos:
+                return False
+            with open(lf, "rb") as f:
+                f.seek(pos)
+                return b"expired from playlists" in f.read(size - pos)
+        except OSError:
+            return False
 
     def _start(self, sched, now, post, timeshift=False):
         ch = db.row("SELECT * FROM channels WHERE id=?", (sched["channel_id"],))
@@ -658,7 +685,7 @@ class Recorder:
             prev_dur = sum(float(x) for x in re.findall(r"#EXTINF:([\d.]+)", text))
         except OSError:
             pass
-        cmd = [FFMPEG] + _input_args(ch["url"]) + _copy_args(ch["url"]) + [
+        cmd = [FFMPEG] + _input_args(ch["url"], live_edge=True) + _copy_args(ch["url"]) + [
             # Continue timestamps where the previous run ended: a fresh ffmpeg would
             # rebase to 0, and a Roku playing across the boundary sees a huge
             # backward jump - audio and video come unglued there.
